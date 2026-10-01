@@ -1,0 +1,9 @@
+evidence/
+.build/
+*.xcuserdata
+.DS_Store
+build/
+logs/
+run/
+tools/bin/
+PROMPT.md
