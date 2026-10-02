@@ -199,11 +199,12 @@ carries `sim=1`. Source ids and rules: [README.md section 10](README.md#10-模�
   CPU System/User/Idle differed by a median 0.26–0.88 percentage points and threads by 4–5; network packet totals fell
   between two consecutive panel samples in 496 of 496 refreshes; per-second rates differ by a median 5.7–10 % because
   the windows differ. `amcompare` automates the memory view (Traditional Chinese, battery column shown) only.
-- CPU use on the Wokyis (2026-10-02, 5-minute averages including child processes): memory view 1.29–1.67 % of one core
-  (highest 5-minute window 1.71 %), CPU view 0.91–1.08 %, network view 0.74–1.26 % (one round each was measured
-  before the memory default changed; those views draw no memory values). A single minute can go above 2 %. Memory
-  values are redrawn twice a second by default; with `--mem-display-hz 4` the memory view once measured 2.09 %.
-  `--mem-display-hz 1` lowers it further.
+- CPU use stays close to, but under, the limit of 2 % of one core averaged over 5 minutes (the "% CPU" figure in
+  Activity Monitor; 2 % is about 1.2 s of work per minute). The memory view uses the most, about 1.3–1.7 % (busiest
+  5 minutes 1.71 %); the CPU and network views about 0.7–1.3 %, since they update once a second. A single minute can go
+  above 2 %. Memory numbers redraw twice a second by default (memory is still read 4 times a second for the graph); at
+  4 times a second the memory view once measured 2.09 %. To use even less, quit the panel and run
+  `open -a WokyisPanel --args --mem-display-hz 1` (this launch only). For the whole Mac mini this is under 0.2 %.
 - The menu bar and the full-screen title bar slide over the top ~60 px when the pointer touches the top edge of the
   Wokyis.
 - Logs are never deleted automatically.
