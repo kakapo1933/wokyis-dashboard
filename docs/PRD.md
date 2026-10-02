@@ -3,8 +3,8 @@
 | 項目 | 內容 |
 |---|---|
 | 產品 | Wokyis Panel（`WokyisPanel.app`，bundle ID `io.github.kakapo1933.wokyis-panel`） |
-| 版本 | 2.0.0（[GitHub Release v2.0.0](https://github.com/kakapo1933/wokyis-dashboard/releases/tag/v2.0.0)） |
-| 文件性質 | 依已完成並驗收的 v1、v2 反推整理；需求、決策與驗收結果都對應目前的程式與 [README](../README.md) |
+| 版本 | 2.1.0（[GitHub Release v2.1.0](https://github.com/kakapo1933/wokyis-dashboard/releases/tag/v2.1.0)） |
+| 文件性質 | 依已完成並驗收的 v1、v2、2.0.0、2.1.0 反推整理；需求、決策與驗收結果都對應目前的程式與 [README](../README.md) |
 | 最後更新 | 2026-10-02 |
 
 ---
@@ -104,6 +104,7 @@ Mac mini 外接一台 Wokyis 5 吋 16:9 小螢幕（1280×720，以 1 倍縮放�
 | F23 | 安裝版的 log 與執行檔案放在 `~/Library/Application Support/WokyisPanel/`，不寫入唯讀位置 | ✅ | README §3.1、§4.6 |
 | F24 | 每個使用者同時只有一個面板（安裝版與專案版互斥），被拒的那份不影響正在跑的那份 | ✅ | README §3.1 |
 | F25 | 首次開啟的 Gatekeeper 步驟寫進說明（App 只有 ad-hoc 簽章，未經公證） | 🟡 | README §3.1 |
+| F26 | log 只保留最近 30 天：啟動時與每小時刪除超過 30 天的舊 log（只限本 App 的 log 檔名，不動當次與其他檔案）；`--log-retention-days` 可改，0 為不刪 | ✅ | README §4.6 |
 
 備註：F25 的介面字樣是對照系統語系檔確認的，沒有實際走過一次下載後的阻擋流程；macOS 14 的字樣未驗證。
 
@@ -116,6 +117,7 @@ Mac mini 外接一台 Wokyis 5 吋 16:9 小螢幕（1280×720，以 1 倍縮放�
 | N3 | 記憶體：< 150 MB | footprint 最高約 87 MB |
 | N4 | 權限：不需要 sudo、網路、藍牙或「輔助使用」權限；不修改系統設定 | 符合 |
 | N5 | 可觀測、可停止：有 log、狀態查詢與停止指令；安裝版可從選單結束 | 符合（README §4） |
+| N7 | 磁碟占用有上限：log 不無限累積 | 預設約 5 MB/天，保留 30 天約 150 MB（F26） |
 | N6 | 隱私：程式、文件與安裝檔不含個人資訊；驗收截圖只留本機、不進 git | 發行前掃描通過 |
 
 ## 6. 驗收結果
@@ -179,6 +181,7 @@ Mac mini 外接一台 Wokyis 5 吋 16:9 小螢幕（1280×720，以 1 倍縮放�
 | v1 | 2026-10-01 | 記憶體畫面＋周邊電量；全螢幕常駐、自動重建、容錯與模擬、驗證工具 |
 | v2 | 2026-10-02 | CPU、網路畫面；選單列圖示與快捷鍵切換；電量欄開關；繁中／英文 |
 | 2.0.0 | 2026-10-02 | 新 icon；可安裝的 App 與 DMG（老 Macintosh 風格安裝畫面）；GitHub Release |
+| 2.1.0 | 2026-10-02 | log 自動保留最近 30 天（`--log-retention-days`） |
 
 ## 10. 未決事項與後續可能
 

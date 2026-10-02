@@ -49,7 +49,7 @@ scripts/build.sh
 1. `swiftc -O -swift-version 5 -target arm64-apple-macos14.0`，明確列出 `Sources/` 下 41 個檔案，連結 AppKit、IOKit、CoreText、Carbon（全域快捷鍵），輸出 `build/WokyisPanel.app/Contents/MacOS/WokyisPanel`。
 2. 複製 `Resources/Info.plist`（`CFBundleIdentifier=io.github.kakapo1933.wokyis-panel`，沒有任何 `NSBluetooth*` key，沒有 `LSUIElement`）。
 3. ad-hoc 簽章：`codesign --force --sign - --timestamp=none`，再用 `codesign --verify --verbose=2` 驗證。
-4. 執行 `WokyisPanel --selftest`：Config、Injector、EventLog、記憶體公式與格式、電量解析與合併（含「附近」狀態）、Store／分頁／版面、v2 的 CPU／網路公式與 SystemSampler、設定三層與選單模型、三個畫面 × 中英 × 電量欄的版面，以及記憶體畫面的 golden（固定 fixture 的 RGBA SHA-256 釘死，確保 v1 記憶體＋中文＋電量欄逐像素不變）等內建測試（目前 514/514）。任何一項失敗即建置失敗。
+4. 執行 `WokyisPanel --selftest`：Config、Injector、EventLog、記憶體公式與格式、電量解析與合併（含「附近」狀態）、Store／分頁／版面、v2 的 CPU／網路公式與 SystemSampler、設定三層與選單模型、三個畫面 × 中英 × 電量欄的版面，以及記憶體畫面的 golden（固定 fixture 的 RGBA SHA-256 釘死，確保 v1 記憶體＋中文＋電量欄逐像素不變）等內建測試（目前 517/517）。任何一項失敗即建置失敗。
 5. `tools/build.sh`：建出 `tools/bin/` 下的驗證工具（glyphheight、fontcal、ocr、procstat、composite、mockup、amcompare、edgecheck、winlist、logstats），最後跑 `tools/selftest.sh`（edgecheck、winlist、logstats、amcompare unittest、linkcheck）。工具說明見 [tools/README.md](tools/README.md)。
 
 `Sources/Evidence/`（Snapshot、SelfTest、Golden*）是建置必需的原始碼。`.gitignore` 的 `/evidence/` 只忽略專案根目錄的驗證輸出；因為本 repo 的 `core.ignorecase=true`，舊規則 `evidence/` 也會忽略 `Sources/Evidence/`，已改成錨定寫法。
