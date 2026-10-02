@@ -311,6 +311,13 @@ enum AppSelfTest {
                && AppController.memHzTarget(view: .network, visible: false, configured: 2) == 1
                && AppController.memHzTarget(view: .memory, visible: true, configured: 1) == 1)
 
+        // single instance across copies: any other live process with the bundle id blocks the launch
+        let own: pid_t = 100
+        let oi1 = AppController.otherInstance(own: own, copies: [(pid: 100, terminated: false, path: "/Applications/WokyisPanel.app")])
+        let oi2 = AppController.otherInstance(own: own, copies: [(pid: 100, terminated: false, path: "/a"), (pid: 7, terminated: true, path: "/b"),
+                                                                (pid: 9, terminated: false, path: "/src/build/WokyisPanel.app")])
+        expect("app.other_instance", oi1 == nil && oi2?.pid == 9 && oi2?.path == "/src/build/WokyisPanel.app", "\(String(describing: oi2))")
+
         // L3 --mem-display-hz 2: values follow .000 / .500 only (sampling stays 4 Hz)
         var cfg = Config(); cfg.memDisplayHz = 2
         let d = Store(config: cfg, startedAt: t0)

@@ -11,7 +11,7 @@ signal(SIGPIPE, SIG_IGN)   // stdout may be a pipe whose reader goes away; never
 
 let config: Config
 do {
-    config = try Config.parse(Array(CommandLine.arguments.dropFirst()))
+    config = try Config.parse(Array(CommandLine.arguments.dropFirst())).resolvingDirs()   // dirs fixed for the whole run
 } catch let e as Config.ParseError {
     if e.description == "help" { print(Config.usage); exit(0) }
     FileHandle.standardError.write(Data("WokyisPanel: \(e.description)\n\(Config.usage)\n".utf8))
@@ -29,9 +29,12 @@ case .snapshot:
 case .headless:
     Headless.run(config: config)
 case .app:
+    // one panel per user, decided before the log opens: a refused copy must not move current.log
+    let lock = InstanceLock.acquire()
     let log: EventLog
     do {
-        log = try EventLog(dir: config.logDirURL, level: config.logLevel, summarySeconds: config.summarySeconds)
+        log = try EventLog(dir: config.logDirURL, level: config.logLevel, summarySeconds: config.summarySeconds,
+                           linkCurrent: lock != .busy)
     } catch {
         FileHandle.standardError.write(Data("WokyisPanel: cannot open log dir \(config.logDirURL.path): \(error)\n".utf8))
         exit(73)
@@ -48,6 +51,22 @@ case .app:
                                            mibs: "\(table.resolvedCount)/\(table.names.count)", ui: settings)
               + " log=\(EventLog.q(log.currentFile.path))")
     for w in settingsWarnings { log.event("WARN", "settings_invalid \(w) domain=\(DefaultsSettingsStore.domain)") }
+    switch lock {
+    case .busy:
+        // another copy (the checkout's build or an installed app) drives the Wokyis; name it when LaunchServices knows it
+        let copies = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "-")
+            .map { (pid: $0.processIdentifier, terminated: $0.isTerminated, path: $0.bundleURL?.path) }
+        let other = AppController.otherInstance(own: getpid(), copies: copies)
+        log.event("ERR", "src=instance err=already_running pid=\(other.map { String($0.pid) } ?? "-") path=\(EventLog.q(other?.path ?? "-")) "
+                  + "lock=\(EventLog.q(InstanceLock.path)) action=exit")
+        log.event("STOP", "reason=already_running uptime_s=0 samples=0 draws=0 sp_child_at_stop=-")
+        log.flushSync()
+        exit(1)
+    case .unavailable(let e):
+        log.event("WARN", "src=instance lock_unavailable errno=\(e) path=\(EventLog.q(InstanceLock.path)) action=continue")
+    case .acquired:
+        break
+    }
     injector.start()
     let app = NSApplication.shared
     app.setActivationPolicy(.regular)
@@ -61,7 +80,7 @@ case .app:
     log.line("HEALTH", "activity_options=0x\(String(activityOptions.rawValue, radix: 16)) latency_critical=\(activityOptions.contains(.latencyCritical) ? 1 : 0)")
     let controller = AppController(config: config, log: log, injector: injector, settings: settings)
     app.delegate = controller
-    withExtendedLifetime((controller, activity)) { app.run() }
+    withExtendedLifetime((controller, activity, lock)) { app.run() }
     log.flushSync()
     exit(0)
 }

@@ -20,7 +20,7 @@ v2 加了另外兩個畫面：**CPU**（AM CPU 分頁頁尾：CPU 系統／使�
 
 > Wokyis 實機截圖（1280×720 原生像素）：一般狀態（面板剛啟動，壓力圖左軸「收集中 N/10 分鐘」）、AirPods 沒連到 Mac 時的「附近」灰字、用模擬注入產生的「嚴重」紅色壓力（模擬中會有洋紅外框與徽章）。v2 的 CPU 與網路畫面是面板在執行中以 SIGUSR1（`scripts/snapshot.sh`）輸出的 1280×720 snapshot：同一個 renderer、當下的實際資料（面板剛啟動約 1 分鐘，所以圖只有右端一小段），不是 Wokyis 實機截圖。
 
-目錄：[說明與畫面](#1-一句話說明與畫面)｜[需求與限制](#2-需求與限制)｜[建置](#3-建置)｜[啟動與停止](#4-啟動停止狀態與-log)｜[與其他全螢幕 App 切換](#5-與其他全螢幕-app-切換)｜[狀態列與快捷鍵](#51-狀態列圖示與快捷鍵)｜[技術選型](#6-技術選型理由)｜[畫面說明](#7-畫面說明)｜[資料來源與公式](#8-每個欄位的資料來源與換算公式)｜[更新頻率與 log](#9-更新頻率與-log-格式)｜[模擬與容錯](#10-模擬與容錯)｜[已知限制](#11-已知限制)
+目錄：[說明與畫面](#1-一句話說明與畫面)｜[需求與限制](#2-需求與限制)｜[建置](#3-建置)｜[下載安裝](#31-下載安裝github-release)｜[啟動與停止](#4-啟動停止狀態與-log)｜[與其他全螢幕 App 切換](#5-與其他全螢幕-app-切換)｜[狀態列與快捷鍵](#51-狀態列圖示與快捷鍵)｜[技術選型](#6-技術選型理由)｜[畫面說明](#7-畫面說明)｜[資料來源與公式](#8-每個欄位的資料來源與換算公式)｜[更新頻率與 log](#9-更新頻率與-log-格式)｜[模擬與容錯](#10-模擬與容錯)｜[已知限制](#11-已知限制)
 
 ---
 
@@ -34,7 +34,7 @@ v2 加了另外兩個畫面：**CPU**（AM CPU 分頁頁尾：CPU 系統／使�
 | 權限 | 不需要 sudo、不連網路、不裝第三方套件；不使用 IOBluetooth，因此不需要藍牙權限（不會出現 TCC 對話框） |
 | 記憶體 sysctl | 依賴系統提供的 `vm.mte.*` MIB；若某個 MTE free MIB 不存在，自動改用 calibrated 模式（見第 8 節） |
 | 快捷鍵 | Carbon `RegisterEventHotKey`，不需要「輔助使用」權限；鍵位是 US 配置的實體鍵（第 5.1 節） |
-| 不在範圍內 | 開機自動啟動、iPhone／Apple Watch 電量、GPU、磁碟、能耗等 AM 其他分頁 |
+| 不在範圍內 | 面板本身不設定登入時自動啟動（可用 macOS 登入項目，見第 3.1 節）；iPhone／Apple Watch 電量、GPU、磁碟、能耗等 AM 其他分頁 |
 
 ---
 
@@ -49,13 +49,32 @@ scripts/build.sh
 1. `swiftc -O -swift-version 5 -target arm64-apple-macos14.0`，明確列出 `Sources/` 下 41 個檔案，連結 AppKit、IOKit、CoreText、Carbon（全域快捷鍵），輸出 `build/WokyisPanel.app/Contents/MacOS/WokyisPanel`。
 2. 複製 `Resources/Info.plist`（`CFBundleIdentifier=io.github.kakapo1933.wokyis-panel`，沒有任何 `NSBluetooth*` key，沒有 `LSUIElement`）。
 3. ad-hoc 簽章：`codesign --force --sign - --timestamp=none`，再用 `codesign --verify --verbose=2` 驗證。
-4. 執行 `WokyisPanel --selftest`：Config、Injector、EventLog、記憶體公式與格式、電量解析與合併（含「附近」狀態）、Store／分頁／版面、v2 的 CPU／網路公式與 SystemSampler、設定三層與選單模型、三個畫面 × 中英 × 電量欄的版面，以及記憶體畫面的 golden（固定 fixture 的 RGBA SHA-256 釘死，確保 v1 記憶體＋中文＋電量欄逐像素不變）等內建測試（目前 510/510）。任何一項失敗即建置失敗。
+4. 執行 `WokyisPanel --selftest`：Config、Injector、EventLog、記憶體公式與格式、電量解析與合併（含「附近」狀態）、Store／分頁／版面、v2 的 CPU／網路公式與 SystemSampler、設定三層與選單模型、三個畫面 × 中英 × 電量欄的版面，以及記憶體畫面的 golden（固定 fixture 的 RGBA SHA-256 釘死，確保 v1 記憶體＋中文＋電量欄逐像素不變）等內建測試（目前 514/514）。任何一項失敗即建置失敗。
 5. `tools/build.sh`：建出 `tools/bin/` 下的驗證工具（glyphheight、fontcal、ocr、procstat、composite、mockup、amcompare、edgecheck、winlist、logstats），最後跑 `tools/selftest.sh`（edgecheck、winlist、logstats、amcompare unittest、linkcheck）。工具說明見 [tools/README.md](tools/README.md)。
 
 `Sources/Evidence/`（Snapshot、SelfTest、Golden*）是建置必需的原始碼。`.gitignore` 的 `/evidence/` 只忽略專案根目錄的驗證輸出；因為本 repo 的 `core.ignorecase=true`，舊規則 `evidence/` 也會忽略 `Sources/Evidence/`，已改成錨定寫法。
 
 環境變數：`SKIP_TOOLS=1` 略過第 5 步；`TOOLS_SELFTEST=0` 只建工具、不跑工具 selftest。
 
+### 3.1 下載安裝（GitHub Release）
+
+不想自己建置時，到 [Releases](https://github.com/kakapo1933/wokyis-dashboard/releases) 下載 `WokyisPanel-<版本>.dmg`。需求同第 2 節：Apple Silicon、macOS 14 以上、Wokyis 為延伸桌面，並開啟「每個顯示器有各自的空間」。
+
+1. 打開 dmg，把 `WokyisPanel.app` 拖到「應用程式」（Applications）。
+2. 第一次開啟會被 macOS 擋下：App 只有 ad-hoc 簽章，沒有 Apple Developer ID 簽章與公證。
+   - 跳出「未打開『WokyisPanel』」時按「完成」，**不要按「丟到垃圾桶」**。
+   - 到「系統設定 › 隱私權與安全性」，在「安全性」區塊找到 WokyisPanel 被阻擋的訊息，按「強制打開」（英文介面為 Open Anyway），再確認一次；可能需要輸入密碼或 Touch ID。之後就能正常開啟。
+   - 也可以改用終端機移除下載標記：`xattr -dr com.apple.quarantine /Applications/WokyisPanel.app`。
+3. 開啟後面板自己找到 Wokyis 並全螢幕（第 5 節）；沒接 Wokyis 時會等它接上。介面預設繁體中文（⌃⌥⌘L 切換英文）。結束：狀態列圖示 ›「結束 Wokyis 面板」。
+4. 由 LaunchServices 開啟（Finder、Dock、登入項目）時沒有命令列參數，log 與 run 檔放在 `~/Library/Application Support/WokyisPanel/{logs,run}/`（最新 log：`logs/current.log`）。記住的設定（第 4.6 節）與專案版共用。
+5. 專案的 `scripts/status.sh`、`stop.sh`、`logs.sh` 只管專案 `build/` 裡的面板；安裝版在跑時，`stop.sh` 只會提示有其他副本，不會停它。安裝版請從選單結束。
+6. 同一時間只會有一個面板：任何兩份副本（安裝版、專案版）都互斥，後啟動的那個記 `ERR src=instance err=already_running` 後直接結束，不會改動 `current.log`。所以另一個還在跑時，從 Finder 開安裝版會像是沒反應，先結束另一個再開。
+7. 登入時自動啟動（選擇性）：「系統設定 › 一般 › 登入項目與延伸功能」（macOS 14 為「登入項目」）的「在登入時打開」按 ＋ 加入 WokyisPanel。
+8. 移除：先結束面板，再把 App 丟到垃圾桶。要連 log 與設定一起清掉，刪除 `~/Library/Application Support/WokyisPanel/` 並執行 `defaults delete io.github.kakapo1933.wokyis-panel`；設定與專案版共用，這也會重設專案版記住的設定。
+
+自己打包：`scripts/package.sh` 先跑 `scripts/build.sh`（略過工具），再用 `hdiutil` 產生 `dist/WokyisPanel-<版本>.dmg`（App 加上「應用程式」捷徑）與 `.sha256`。版本取自 App 內的 `Info.plist`（`build.sh` 從 `Resources/Info.plist` 複製；`SKIP_BUILD=1` 時直接打包現有的 `build/WokyisPanel.app`，版本就是那份 build 的）。DMG 每次產生的位元組都不同，上傳後若重新打包，DMG 與 `.sha256` 要一起重傳。
+
+以上「完成」「強制打開」「登入項目與延伸功能」等介面字樣，是對照本機 macOS 的系統語系表確認的，沒有實際走過一次下載後的阻擋流程；macOS 14 的字樣未驗證。
 
 ---
 
@@ -72,7 +91,7 @@ scripts/start.sh --log-level sample    # 額外參數直接傳給 WokyisPanel（
 
 - `start.sh` 以 `exec` 直接執行面板，參數固定帶 `--log-dir logs --run-dir run`。
 - 終端機（stdout）只會出現：`START` 與事件行（`WIN`、`ERR`、`RECOVER`、`WARN`、`DEV`、`CTL`、`STOP` 等），以及每 10 秒一行 `SUM` 摘要（`--summary-seconds` 可改）。每 250 ms 一筆的 `MEM` 等細節只寫進 log 檔，不會洗版。
-- 單一實例：`run/panel.pid` 指向另一支活著的 WokyisPanel 時，`start.sh` 拒絕啟動（rc=1）；面板本身也會再檢查一次（`ERR src=pidfile err=already_running`、exit 1）。
+- 單一實例：`run/panel.pid` 指向另一支活著的 WokyisPanel 時，`start.sh` 拒絕啟動（rc=1）；面板本身也會再檢查一次（`ERR src=pidfile err=already_running`、exit 1）。此外，每個使用者同時只能有一個面板：啟動時先取得 `$TMPDIR` 下的單一實例鎖，拿不到（另一份副本在跑，例如安裝在「應用程式」的版本）就記 `ERR src=instance err=already_running pid= path= lock=` 後結束，而且不改 `current.log`。一般情況下另一個面板在跑時看到的是 `src=instance`；`src=pidfile` 只在 pid 檔指向一個沒有持有鎖的 WokyisPanel 時出現。
 - 啟動後面板在 Wokyis 建窗、進入原生全螢幕，再把焦點還給啟動前的前景 App（只搶焦點約 50 ms）。`--no-focus-restore` 可關閉。
 
 視窗相關參數（完整清單見 `WokyisPanel --help`）：
@@ -165,13 +184,15 @@ scripts/start.sh
 | `run/panel.pid` | 面板 pid（結束時清空內容、不刪檔） |
 | `run/control.json` | 模擬／注入設定（第 10 節） |
 | `run/snapshot-<ts>.*` | SIGUSR1 snapshot |
+| `~/Library/Application Support/WokyisPanel/{logs,run}/` | 由 LaunchServices 開啟、且不是專案 `build/` 裡的副本（例如安裝版）使用的 log 與 run 目錄（第 3.1 節）；`--log-dir`／`--run-dir` 可改 |
+| `$TMPDIR/io.github.kakapo1933.wokyis-panel.lock` | 單一實例鎖（`flock`；程式結束時由系統釋放，檔案保留） |
 | `~/Library/Preferences/io.github.kakapo1933.wokyis-panel.plist` | v2 記住的設定（UserDefaults 網域 `io.github.kakapo1933.wokyis-panel`）：`ui.view`（memory／cpu／network）、`ui.batteryVisible`（Bool）、`ui.language`（system／zh／en） |
 
 **設定的優先序**：預設值（記憶體、顯示電量欄、繁體中文）＜ 記住的設定 ＜ 這次的命令列參數。從選單或快捷鍵改設定時，只寫入被改的那一個鍵；`--view`／`--battery`／`--lang` 永遠不寫入（例如以 `--view cpu --lang en` 啟動後按 ⌃⌥⌘B，只會記住電量欄；`ui.view`、`ui.language` 不變）。無效的值會被忽略，並記 `WARN settings_invalid key= value=`。START 行的 `settings_src=view:cli,battery:stored,lang:default` 記錄每個欄位的來源。`--selftest`、`--snapshot`、`--headless` 完全不讀也不寫設定。
 
 **重設設定**：先 `scripts/stop.sh`，再執行 `defaults delete io.github.kakapo1933.wokyis-panel`，下次啟動回到預設值。只看目前值：`defaults read io.github.kakapo1933.wokyis-panel`。
 
-**log 不會自動刪除**。`logs/` 超過 1 GB 時，啟動時與之後每小時最多一次記 `WARN log_dir_mb=…`；是否刪舊檔由使用者決定。`build/ logs/ run/ tools/bin/` 都在 `.gitignore`。
+**log 不會自動刪除**。`logs/` 超過 1 GB 時，啟動時與之後每小時最多一次記 `WARN log_dir_mb=…`；是否刪舊檔由使用者決定。`build/ logs/ run/ tools/bin/ dist/` 都在 `.gitignore`。
 
 ---
 

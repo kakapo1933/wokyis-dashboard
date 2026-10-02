@@ -35,7 +35,9 @@ else
   done
   sleep 0.1
 fi
-left=$(pgrep -x WokyisPanel | tr '\n' ' ')
+left=$(pgrep -f "$BIN" | tr '\n' ' ')            # this checkout's panel only
+others=""                                          # other copies (e.g. the installed app): reported, not managed here
+for o in $(pgrep -x WokyisPanel); do case " $left " in *" $o "*) ;; *) others="$others $o";; esac; done
 orph=""
 for sp in $(pgrep -x system_profiler 2>/dev/null); do
   pp=$(ps -o ppid= -p "$sp" | tr -d ' ')
@@ -47,6 +49,7 @@ for k in $(echo "$kids" | tr ' ' '\n' | sed '/^$/d' | sort -u); do
   if [ -n "$kp" ] && { [ "$kp" = "${p:-x}" ] || [ "$kp" = 1 ]; }; then orph="$orph $k($(ps -o comm= -p "$k" | sed 's#.*/##'))"; fi
 done
 tracked=$(echo "$kids" | tr ' ' '\n' | sed '/^$/d' | sort -u | tr '\n' ' ')
+[ -n "$others" ] && echo "note: other WokyisPanel copies running (not managed by these scripts, e.g. the installed app):$others"
 echo "check: WokyisPanel processes: ${left:-none}; children seen while stopping: ${tracked:-none}; leftover panel system_profiler / children (ppid ${p:-?} or orphaned to 1): ${orph:-none}"
 if [ -e "$LOG_DIR/current.log" ]; then echo "--- last log lines ($LOG_DIR/current.log)"; tail -3 "$LOG_DIR/current.log"; fi
 echo "The Wokyis now shows its desktop Space: move the pointer onto the Wokyis and press Ctrl+→, or click Music in the Dock."

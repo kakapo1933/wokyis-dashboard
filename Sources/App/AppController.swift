@@ -38,8 +38,10 @@
 // creating → enteringFS on the Wokyis (never a window on the LG). Only the App menu's Quit.
 // Focus is handed back once, and only after an entry the panel started (create / SIGUSR2): a user green-button
 // re-entry from windowed keeps the focus where the user put it (prevApp is one-shot).
-// Single instance: launch refuses (ERR already_running, exit 1) while run/panel.pid names another live WokyisPanel;
-// exit empties panel.pid only when it still holds this pid.
+// Single instance: main.swift refuses the launch before the log links current.log when another app-mode panel of this
+// user holds InstanceLock (ERR src=instance: any copy, e.g. the installed app and the checkout's build); here the launch
+// is also refused while run/panel.pid names another live WokyisPanel (ERR src=pidfile). Both exit 1. Exit empties
+// panel.pid only when it still holds this pid.
 // v2 (spec §5, §7, §8): SystemSampler (1 Hz CPU / network, every view), the status item menu and the Carbon hot keys
 // (created after the Store, before tryCreate; independent of the window phase) both go through apply(_:via:), which
 // changes one setting (SettingsModel: stored + that one UserDefaults key; CLI never persisted), de-duplicates the same
@@ -969,6 +971,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
                              name: (pid_t) -> String? = AppController.processName) -> pid_t? {
         guard let s = try? String(contentsOf: url, encoding: .utf8) else { return nil }
         return otherLivePanel(content: s, own: own, name: name)
+    }
+    /// A live copy of this app other than this process (same bundle identifier, any path): names the panel that holds
+    /// InstanceLock in the ERR src=instance line.
+    static func otherInstance(own: pid_t, copies: [(pid: pid_t, terminated: Bool, path: String?)]) -> (pid: pid_t, path: String)? {
+        copies.first { $0.pid != own && !$0.terminated }.map { ($0.pid, $0.path ?? "?") }
     }
     static func otherLivePanel(content: String, own: pid_t, name: (pid_t) -> String?) -> pid_t? {
         guard let p = pid_t(content.trimmingCharacters(in: .whitespacesAndNewlines)), p > 0, p != own else { return nil }

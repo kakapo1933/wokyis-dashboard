@@ -355,7 +355,8 @@ struct Config: Sendable, Equatable {
   enum Mode: String { case app, headless, selftest, snapshot }; var mode: Mode
   static func parse(_ argv: [String]) throws -> Config      // throws Config.ParseError(description:); "help" for -h/--help
   static let usage: String
-  var logDirURL: URL; var runDirURL: URL                  // relative → cwd; if cwd == "/" (LaunchServices) → <bundle>/../..
+  var logDirURL: URL; var runDirURL: URL                  // relative → Config.relativeBase(cwd:bundle:home:exists:): cwd; cwd "/" → checkout (bundle in <root>/build/ and <root>/scripts/start.sh exists) else ~/Library/Application Support/WokyisPanel
+  func resolvingDirs() -> Config                          // main.swift: both dirs made absolute once at launch
   static func resolve(_ p: String) -> URL
 }
 enum ConfigSelfTest { static func run() -> [SelfTestCase] }
@@ -396,7 +397,7 @@ Log lines written by the Injector: `CTL state="…"`, `CTL state="none" why=miss
 ```swift
 final class EventLog: @unchecked Sendable {
   init(dir: URL, level: LogLevel = .summary, summarySeconds: Double = 10, rotateBytes: Int = 64 << 20,
-       echoStdout: Bool = true, now: Date = Date()) throws
+       echoStdout: Bool = true, now: Date = Date(), linkCurrent: Bool = true) throws   // false: never touch current.log
   var simActive: @Sendable () -> Bool            // set once at start: { injector.active } → " sim=1" appended to lines without sim=
   func line(_ kind: String, _ body: String, at: Date = Date())    // file only (level filter)
   func event(_ kind: String, _ body: String, at: Date = Date())   // file + stdout (MEM/DSP/AUD/BAT never echoed)
@@ -566,7 +567,7 @@ enum StateBuilder { static func placeholder(now: Date) -> PanelState; static let
   static func regionKeys(_ s: PanelState) -> [Region: String]    // a region is redrawn when its key changes; .chrome = sim frame flag
   static func axisLabel(_ coverage: Double) -> String; static func deviceSignature(_:) -> String
   static func dspBattery(_ s: PanelState) -> String }            // "kb:100 tp:85 L:100 R:97 C:48c" (page shown; F/U/S/off/none; kb[TAG]: / pods[TAG] when a kind is shown twice)
-enum AppSelfTest { static func run() -> [SelfTestCase] }         // 85 app.* cases in --selftest (Store/StateBuilder, tick, screen loss, focus, pid file, 59 auto_recover incl. 29 auto_recover.locked.*)
+enum AppSelfTest { static func run() -> [SelfTestCase] }         // 85 app.* cases (+ app.other_instance, app.instance_lock elsewhere) in --selftest (Store/StateBuilder, tick, screen loss, focus, pid file, 59 auto_recover incl. 29 auto_recover.locked.*)
 // App/DisplayLocator.swift
 enum DisplayLocator { static func locate(override: CGDirectDisplayID?) -> WokyisScreen?   // §9.1 order; override is strict
   static func displayID(of: NSScreen) -> CGDirectDisplayID?; static func describe(_:) -> String; static func signature() -> String }
@@ -639,8 +640,14 @@ stale=0|1 [blank=1] draw_us= sim=`, `SNAP path= source=drawn|store dsp_seq= mem_
 Scripts (bash 3.2, `scripts/_common.sh` shared): `start.sh [--bg] [-- args]`, `stop.sh`, `status.sh`, `logs.sh`,
 `sim.sh fail|hang|garbage|pressure|clear|status` (each command replaces control.json atomically; --for ≤ 900 s),
 `snapshot.sh` (SIGUSR1), `fullscreen.sh` (SIGUSR2). The pid file (`run/panel.pid`, emptied at exit, never deleted) is
-written by the app path; headless does not write it. App-mode launch refuses (`ERR src=pidfile err=already_running pid=
-action=exit`, `STOP reason=already_running`, exit 1) while the file names another live WokyisPanel; exit empties the file
+written by the app path; headless does not write it. App-mode launch first takes `InstanceLock` (Core/Support.swift: an
+exclusive `flock` on `$TMPDIR/io.github.kakapo1933.wokyis-panel.lock`, fd kept open for the process lifetime, released by
+the kernel on exit or crash) before the log opens; when another panel of this user holds it (any copy: the checkout's
+build or an installed app) the log is opened with `linkCurrent: false` and the launch refuses (`START`, then
+`ERR src=instance err=already_running pid= path= lock= action=exit` with pid/path from `AppController.otherInstance` over
+the running copies with the same bundle id, `STOP reason=already_running`, exit 1); a lock that cannot be opened logs
+`WARN src=instance lock_unavailable errno=` and continues. The launch also refuses (`ERR src=pidfile err=already_running
+pid= action=exit`, `STOP reason=already_running`, exit 1) while the pid file names another live WokyisPanel; exit empties the file
 only while it still holds the panel's own pid (else `WARN pidfile_kept content= own=`). The app 1 Hz tick is a monotonic
 one-shot re-armed per wall second (+30 ms); a clock step back re-grids it (`WARN clock_step src=tick dir=back by_s= regrid=1`).
 `WIN event=focus_restore skipped=1 reason=user_toggle` = a user green-button re-entry from windowed (no focus hand-back;

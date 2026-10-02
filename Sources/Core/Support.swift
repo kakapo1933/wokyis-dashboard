@@ -94,3 +94,33 @@ enum ProcessHealth {
                       rssMB: Double(info.ri_resident_size) / 1_048_576)
     }
 }
+
+/// One app-mode panel per user (any copy: the checkout's build/ or an installed app): an exclusive flock on a fixed
+/// per-user file, taken before the log is opened and held until the process exits (the fd is never closed; the kernel
+/// releases the lock on exit or crash). Unlike a LaunchServices lookup it has no window in which two copies started
+/// together both see each other, and unlike run/panel.pid it does not depend on --run-dir. O_CLOEXEC: children such as
+/// system_profiler never inherit it.
+enum InstanceLock {
+    static let path = (NSTemporaryDirectory() as NSString).appendingPathComponent("io.github.kakapo1933.wokyis-panel.lock")
+    enum Result: Equatable { case acquired(Int32), busy, unavailable(Int32) }   // unavailable: errno; the panel still starts
+    static func acquire(at path: String = InstanceLock.path) -> Result {
+        let fd = Darwin.open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { return .unavailable(errno) }
+        if flock(fd, LOCK_EX | LOCK_NB) == 0 { return .acquired(fd) }
+        let e = errno
+        Darwin.close(fd)
+        return e == EWOULDBLOCK ? .busy : .unavailable(e)
+    }
+    static func selfTest() -> [SelfTestCase] {
+        let p = (NSTemporaryDirectory() as NSString).appendingPathComponent("wokyis-lock-selftest-\(getpid())")
+        let a = acquire(at: p), b = acquire(at: p)
+        if case .acquired(let fd) = a { Darwin.close(fd) }        // releases the lock
+        let c = acquire(at: p)
+        if case .acquired(let fd) = c { Darwin.close(fd) }
+        unlink(p)
+        var firstOK = false, thirdOK = false
+        if case .acquired = a { firstOK = true }
+        if case .acquired = c { thirdOK = true }
+        return [SelfTestCase("app.instance_lock", firstOK && b == .busy && thirdOK, "\(a) \(b) \(c)")]
+    }
+}

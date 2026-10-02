@@ -40,6 +40,35 @@ Offline, bash 3.2: `swiftc` with an explicit source list (AppKit, IOKit, CoreTex
 `tools/build.sh` (verification tools and their self tests; `SKIP_TOOLS=1` skips it). `Sources/Evidence/` is build
 source code, not evidence output: commit it together with the rest of `Sources/`.
 
+### Install from GitHub Releases
+
+Download `WokyisPanel-<version>.dmg` from [Releases](https://github.com/kakapo1933/wokyis-dashboard/releases),
+open it and drag `WokyisPanel.app` to Applications. Requirements as above (Apple Silicon, macOS 14 or later, the
+Wokyis as an extended desktop, "Displays have separate Spaces" on).
+
+- The app is ad-hoc signed only (no Developer ID signature or notarization), so macOS blocks the first launch. In the
+  "WokyisPanel" Not Opened dialog click Done (not Move to Trash), then open System Settings → Privacy & Security, find
+  the message that WokyisPanel was blocked and click Open Anyway; confirm (password or Touch ID may be asked). Or remove
+  the download flag: `xattr -dr com.apple.quarantine /Applications/WokyisPanel.app`.
+- It finds the Wokyis and goes full screen by itself (and waits while no Wokyis is connected). The UI defaults to
+  Traditional Chinese (⌃⌥⌘L or Language ▸ English switches it), so quit from the menu-bar icon → 結束 Wokyis 面板
+  ("Quit Wokyis Panel" in English).
+- Started by LaunchServices (Finder, Dock, Login Items) the app has no command-line arguments; its logs and run files go
+  to `~/Library/Application Support/WokyisPanel/{logs,run}/` (`logs/current.log`). Saved settings are shared with the
+  checkout's build. `scripts/status.sh`, `stop.sh` and `logs.sh` manage only the panel in the checkout's `build/`;
+  `stop.sh` just notes another running copy and leaves it alone.
+- One panel per user: any two copies exclude each other through a lock in `$TMPDIR`; the one started second logs
+  `ERR src=instance err=already_running` and exits without touching `current.log` (an installed app opened while the
+  other runs seems to do nothing: quit the other one first).
+- Start at login (optional): System Settings → General → Login Items & Extensions (Login Items on macOS 14) → Open at
+  Login → +. Uninstall: quit, move the app to the Trash, and optionally delete `~/Library/Application Support/WokyisPanel/`
+  and run `defaults delete io.github.kakapo1933.wokyis-panel` (this also resets the checkout build's saved settings).
+
+Packaging: `scripts/package.sh` runs `scripts/build.sh` (without tools) and writes `dist/WokyisPanel-<version>.dmg`
+(the app plus an Applications link) and its `.sha256`; the version is the app's `Info.plist` (copied from
+`Resources/Info.plist`; with `SKIP_BUILD=1` the existing `build/WokyisPanel.app` is packaged as is). Each run produces
+different bytes: after uploading, re-upload the DMG and `.sha256` together if you package again.
+
 ## Start, stop, status
 
 ```sh
@@ -51,16 +80,17 @@ scripts/logs.sh                     # tail -F logs/current.log
 scripts/stop.sh                     # SIGTERM, waits up to 6 s, cleans up system_profiler children; deletes no file
 ```
 
-Single instance (`run/panel.pid`). After start the panel creates its window on the Wokyis, enters native full screen
-and gives focus back to the previously active app. Switch between the panel and other full-screen apps on the Wokyis
-with Ctrl+←/→ (pointer on the Wokyis), Cmd+Tab or the Dock. `scripts/fullscreen.sh` re-enters full screen after you
-left it yourself; when the Wokyis disconnects and comes back the panel re-creates its full-screen window by itself.
-While the screen is locked the panel creates no window and never tries full screen (`WIN event=waiting_for_unlock`;
-a full-screen failure while locked does not count toward the 3-failure manual lock); after the unlock
-(`WIN event=unlocked`) it waits 3 s of stable screens and enters full screen on the Wokyis by itself, within the same
-3-attempts-per-10-minutes limit. `scripts/fullscreen.sh` while locked also waits (a windowed panel is closed instead of
-toggled); a request deferred by the lock (start, `scripts/fullscreen.sh`, a full-screen retry) is replayed once after
-the unlock (`WIN event=unlock_replay`), even with `--auto-recover no` and outside that limit.
+Single instance (a per-user lock in `$TMPDIR` shared by every copy, e.g. an installed one, plus `run/panel.pid`).
+After start the panel creates its window on the Wokyis, enters native full screen and gives focus back to the
+previously active app. Switch between the panel and other full-screen apps on the Wokyis with Ctrl+←/→ (pointer on the
+Wokyis), Cmd+Tab or the Dock. `scripts/fullscreen.sh` re-enters full screen after you left it yourself; when the
+Wokyis disconnects and comes back the panel re-creates its full-screen window by itself. While the screen is locked
+the panel creates no window and never tries full screen (`WIN event=waiting_for_unlock`; a full-screen failure while
+locked does not count toward the 3-failure manual lock); after the unlock (`WIN event=unlocked`) it waits 3 s of
+stable screens and enters full screen on the Wokyis by itself, within the same 3-attempts-per-10-minutes limit.
+`scripts/fullscreen.sh` while locked also waits (a windowed panel is closed instead of toggled); a request deferred by
+the lock (start, `scripts/fullscreen.sh`, a full-screen retry) is replayed once after the unlock (`WIN
+event=unlock_replay`), even with `--auto-recover no` and outside that limit.
 
 ## Status menu and hot keys
 

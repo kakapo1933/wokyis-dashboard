@@ -535,14 +535,14 @@ enum BatterySelfTest {
              "Name": "Casey Lin的觸控式軌跡板", "Product ID": 613, "Transport Type": "Bluetooth", "Type": "Accessory Source"],
             ["Accessory Category": "Keyboard", "Accessory Identifier": "02:11:22:33:44:01", "Current Capacity": 100, "Is Charging": kbCharging,
              "Name": "Alex’s Magic Keyboard", "Product ID": 666, "Transport Type": "Bluetooth", "Type": "Accessory Source"],
-            ["Accessory Category": "Headset", "Accessory Identifier": "95B99034-1206-8F22-52E6-897FFAC46D3B", "Current Capacity": 100,
+            ["Accessory Category": "Headset", "Accessory Identifier": "AAAA0000-1206-8F22-52E6-000000000001", "Current Capacity": 100,
              "Is Charging": podsCharging, "Name": "Alex’s AirPods Pro", "Part Identifier": "Combined", "Product ID": 8228,
              "Combined Parts": [["Part Identifier": "Left", "Current Capacity": left, "Is Charging": podsCharging, "Name": "Alex’s AirPods Pro"],
                                 ["Part Identifier": "Right", "Current Capacity": right, "Is Charging": false, "Name": "Alex’s AirPods Pro"]]],
         ]
         if let combinedSID { list[2]["Power Source ID"] = combinedSID }
         if includeCase {
-            let c: NSMutableDictionary = ["Accessory Category": "Audio Battery Case", "Accessory Identifier": "7C690BC6-342D-F08D-B7AC-4676C9F995BA",
+            let c: NSMutableDictionary = ["Accessory Category": "Audio Battery Case", "Accessory Identifier": "AAAA0000-342D-F08D-B7AC-000000000002",
                                           "Current Capacity": casePct, "Is Charging": false, "Name": "Alex’s AirPods Pro Case", "Part Identifier": "Case", "Product ID": 8228]
             if let caseSID { c["Power Source ID"] = caseSID }
             list.append(c)

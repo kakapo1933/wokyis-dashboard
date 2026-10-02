@@ -183,6 +183,7 @@ enum SelfTest {
         cases += SettingsSelfTest.run()       // v2 settings / UI actions (MemorySettingsStore, never UserDefaults)
         cases += HotKeys.selfTest()           // v2 hot-key table + fake registrar (no Carbon registration)
         cases += StatusMenuModel.selfTest()   // v2 menu model (pure, no NSStatusItem)
+        cases += InstanceLock.selfTest()      // one app-mode panel per user (flock on a temp file)
 
         for c in cases { print("\(c.ok ? "PASS" : "FAIL")\t\(c.name)\(c.detail.isEmpty ? "" : "\t" + c.detail)") }
         let failed = cases.filter { !$0.ok }

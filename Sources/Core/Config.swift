@@ -51,8 +51,10 @@ struct Config: Sendable, Equatable {
 
     static let usage = """
     usage: WokyisPanel [options]
-      --log-dir DIR            log directory (default logs)
-      --run-dir DIR            run directory: control.json, panel.pid, snapshots (default run)
+      --log-dir DIR            log directory (default logs). Relative dirs resolve against the current directory;
+                               started by LaunchServices (Finder, Dock, open, Login Items): against the checkout for
+                               <checkout>/build/WokyisPanel.app, otherwise ~/Library/Application Support/WokyisPanel
+      --run-dir DIR            run directory: control.json, panel.pid, snapshots (default run; resolved like --log-dir)
       --mem-hz N               memory sample rate 1…10 Hz (default 4)
       --audit-hz X             host_statistics64 audit rate, 0 = off (default 0.2, ≤ mem-hz)
       --sp-period S            system_profiler period in seconds, ≥ 5 (default 20)
@@ -179,21 +181,30 @@ struct Config: Sendable, Equatable {
         return c
     }
 
-    /// Log-dir / run-dir: absolute paths as given; relative paths against the current directory — except when the
-    /// current directory is "/" (LaunchServices `open build/WokyisPanel.app`), where they resolve against the project
-    /// root inferred from the bundle (<root>/build/WokyisPanel.app).
+    /// Log-dir / run-dir: absolute paths as given; relative paths against `relativeBase` (see there).
     var logDirURL: URL { Config.resolve(logDir) }
     var runDirURL: URL { Config.resolve(runDir) }
+    /// The same config with both dirs made absolute once (main.swift), so they cannot move while the panel runs.
+    func resolvingDirs() -> Config {
+        var c = self; c.logDir = logDirURL.path; c.runDir = runDirURL.path; return c
+    }
     static func resolve(_ p: String) -> URL {
         if p.hasPrefix("/") { return URL(fileURLWithPath: p, isDirectory: true).standardizedFileURL }
-        let cwd = FileManager.default.currentDirectoryPath
-        let base: URL
-        if cwd == "/" && Bundle.main.bundleURL.pathExtension == "app" {
-            base = Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent()
-        } else {
-            base = URL(fileURLWithPath: cwd, isDirectory: true)
-        }
+        let base = relativeBase(cwd: FileManager.default.currentDirectoryPath, bundle: Bundle.main.bundleURL,
+                                home: FileManager.default.homeDirectoryForCurrentUser,
+                                exists: { FileManager.default.fileExists(atPath: $0) })
         return base.appendingPathComponent(p, isDirectory: true).standardizedFileURL
+    }
+
+    /// Base of relative --log-dir / --run-dir: the current directory, except when LaunchServices started the app (cwd
+    /// "/": Finder, Dock, `open`, Login Items): then the checkout when the bundle is <root>/build/WokyisPanel.app and
+    /// <root>/scripts/start.sh exists, and for any other copy (an installed one, e.g. /Applications/WokyisPanel.app, whose
+    /// <bundle>/../.. is "/" and read-only, or an App Translocation path) ~/Library/Application Support/WokyisPanel.
+    static func relativeBase(cwd: String, bundle: URL, home: URL, exists: (String) -> Bool) -> URL {
+        guard cwd == "/" && bundle.pathExtension == "app" else { return URL(fileURLWithPath: cwd, isDirectory: true) }
+        let parent = bundle.deletingLastPathComponent(), checkout = parent.deletingLastPathComponent()
+        if parent.lastPathComponent == "build" && exists(checkout.appendingPathComponent("scripts/start.sh").path) { return checkout }
+        return home.appendingPathComponent("Library/Application Support/WokyisPanel", isDirectory: true)
     }
 
     /// For the START line.
@@ -231,6 +242,21 @@ enum ConfigSelfTest {
         expect("snapshot", ["--snapshot", "/tmp/x.png", "--dump-rects"]) { $0.mode == .snapshot && $0.dumpRects && $0.snapshotOut == "/tmp/x.png" }
         expect("selftest", ["--selftest"]) { $0.mode == .selftest }
         expect("psn", ["-psn_0_12345"]) { $0.mode == .app }
+        // relative dirs: shell cwd; LaunchServices (cwd "/") → the checkout of build/WokyisPanel.app, else Application Support
+        let home = URL(fileURLWithPath: "/Users/u", isDirectory: true)
+        func base(_ cwd: String, _ app: String, checkout: Bool) -> String {
+            Config.relativeBase(cwd: cwd, bundle: URL(fileURLWithPath: app, isDirectory: true), home: home,
+                                exists: { checkout && $0 == "/src/wp/scripts/start.sh" }).path
+        }
+        let bases = [base("/src/wp", "/src/wp/build/WokyisPanel.app", checkout: true),
+                     base("/", "/src/wp/build/WokyisPanel.app", checkout: true),
+                     base("/", "/Applications/WokyisPanel.app", checkout: false),
+                     base("/", "/Users/u/Downloads/x/WokyisPanel.app", checkout: false),
+                     // ~/Applications/WokyisPanel.app with an unrelated ~/scripts/start.sh: not a checkout (parent is not build/)
+                     Config.relativeBase(cwd: "/", bundle: URL(fileURLWithPath: "/Users/u/Applications/WokyisPanel.app", isDirectory: true),
+                                         home: home, exists: { $0 == "/Users/u/scripts/start.sh" }).path]
+        let support = "/Users/u/Library/Application Support/WokyisPanel"
+        out.append(SelfTestCase("config.relative_base", bases == ["/src/wp", "/src/wp", support, support, support], "\(bases)"))
         reject("memhz", ["--mem-hz", "11"])
         reject("audit>mem", ["--mem-hz", "1", "--audit-hz", "2"])
         reject("level", ["--log-level", "verbose"])

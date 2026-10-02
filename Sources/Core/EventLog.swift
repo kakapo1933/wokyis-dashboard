@@ -52,12 +52,15 @@ final class EventLog: @unchecked Sendable {
     private var lastSum: Date?
     private var lastDirCheck: Date?
     private var writeErrorReported = false
+    private let linkCurrent: Bool
     private var counts: [String: Int] = [:]
     private var dropped: [String: Int] = [:]
 
+    /// `linkCurrent` false: never touch current.log (a launch refused because another panel runs keeps that panel's link).
     init(dir: URL, level: LogLevel = .summary, summarySeconds: Double = 10, rotateBytes: Int = 64 << 20,
-         echoStdout: Bool = true, stdoutFD: Int32 = 1, now: Date = Date()) throws {
+         echoStdout: Bool = true, stdoutFD: Int32 = 1, now: Date = Date(), linkCurrent: Bool = true) throws {
         self.dir = dir; self.level = level; self.summarySeconds = summarySeconds; self.stdoutFD = stdoutFD
+        self.linkCurrent = linkCurrent
         self.rotateBytes = max(1024, rotateBytes); self.echoStdout = echoStdout
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         base = "panel-" + EventLog.compactStamp(now)
@@ -226,7 +229,7 @@ final class EventLog: @unchecked Sendable {
         guard f >= 0 else { throw SourceError.errno(errno, "open \(path)") }
         fd = f
         var st = stat(); fileBytes = fstat(f, &st) == 0 ? Int(st.st_size) : 0
-        updateSymlink()
+        if linkCurrent { updateSymlink() }
     }
 
     private func rotate() {
