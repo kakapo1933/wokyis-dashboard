@@ -65,9 +65,14 @@ Wokyis as an extended desktop, "Displays have separate Spaces" on).
   and run `defaults delete io.github.kakapo1933.wokyis-panel` (this also resets the checkout build's saved settings).
 
 Packaging: `scripts/package.sh` runs `scripts/build.sh` (without tools) and writes `dist/WokyisPanel-<version>.dmg`
-(the app plus an Applications link) and its `.sha256`; the version is the app's `Info.plist` (copied from
-`Resources/Info.plist`; with `SKIP_BUILD=1` the existing `build/WokyisPanel.app` is packaged as is). Each run produces
-different bytes: after uploading, re-upload the DMG and `.sha256` together if you package again.
+and its `.sha256`. The disk image opens as a classic-Macintosh copy window: `Resources/dmg/make_background.swift` draws
+the background (1x pixel art, 2x scaled nearest-neighbour), `Resources/dmg/layout.applescript` has Finder lay out the
+window and icons (stored in the volume's `.DS_Store`), and the app icon becomes the volume icon. So the volume
+"Wokyis Panel <version>" must not be mounted, the first run asks to let the terminal control Finder (Privacy &
+Security → Automation), and `TITLE_BAR=<pt>` overrides the Finder title-bar height (default 32, measured on macOS 27).
+The version is the app's `Info.plist` (copied from `Resources/Info.plist`; with `SKIP_BUILD=1` the existing
+`build/WokyisPanel.app` is packaged as is). Each run produces different bytes: after uploading, re-upload the DMG and
+`.sha256` together if you package again.
 
 ## Start, stop, status
 

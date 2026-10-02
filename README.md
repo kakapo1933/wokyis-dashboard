@@ -72,7 +72,7 @@ scripts/build.sh
 7. 登入時自動啟動（選擇性）：「系統設定 › 一般 › 登入項目與延伸功能」（macOS 14 為「登入項目」）的「在登入時打開」按 ＋ 加入 WokyisPanel。
 8. 移除：先結束面板，再把 App 丟到垃圾桶。要連 log 與設定一起清掉，刪除 `~/Library/Application Support/WokyisPanel/` 並執行 `defaults delete io.github.kakapo1933.wokyis-panel`；設定與專案版共用，這也會重設專案版記住的設定。
 
-自己打包：`scripts/package.sh` 先跑 `scripts/build.sh`（略過工具），再用 `hdiutil` 產生 `dist/WokyisPanel-<版本>.dmg`（App 加上「應用程式」捷徑）與 `.sha256`。版本取自 App 內的 `Info.plist`（`build.sh` 從 `Resources/Info.plist` 複製；`SKIP_BUILD=1` 時直接打包現有的 `build/WokyisPanel.app`，版本就是那份 build 的）。DMG 每次產生的位元組都不同，上傳後若重新打包，DMG 與 `.sha256` 要一起重傳。
+自己打包：`scripts/package.sh` 先跑 `scripts/build.sh`（略過工具），再產生 `dist/WokyisPanel-<版本>.dmg` 與 `.sha256`。DMG 打開後是老 Macintosh 拷貝視窗風格的安裝畫面：`Resources/dmg/make_background.swift` 畫背景（1x 點陣、2x 用最近鄰放大），`Resources/dmg/layout.applescript` 讓 Finder 排好視窗與圖示位置（寫進磁碟的 `.DS_Store`），App 的 icon 當作磁碟圖示。因此打包時：「Wokyis Panel <版本>」這個磁碟不能已經掛著；第一次執行會詢問是否允許終端機控制 Finder（「隱私權與安全性 › 自動化」）；`TITLE_BAR=<pt>` 可改 Finder 標題列高度（預設 32，macOS 27 實測）。版本取自 App 內的 `Info.plist`（`build.sh` 從 `Resources/Info.plist` 複製；`SKIP_BUILD=1` 時直接打包現有的 `build/WokyisPanel.app`，版本就是那份 build 的）。DMG 每次產生的位元組都不同，上傳後若重新打包，DMG 與 `.sha256` 要一起重傳。
 
 以上「完成」「強制打開」「登入項目與延伸功能」等介面字樣，是對照本機 macOS 的系統語系表確認的，沒有實際走過一次下載後的阻擋流程；macOS 14 的字樣未驗證。
 
