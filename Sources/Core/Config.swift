@@ -24,6 +24,7 @@ struct Config: Sendable, Equatable {
     var snapshotOut: String? = nil  // --snapshot OUT.png (offscreen render, no window)
     var dumpRects = false           // --dump-rects (with --snapshot)
     var logLevel: LogLevel = .summary   // D4
+    var logRetentionDays = 30.0         // --log-retention-days N: delete earlier runs' logs older than N days (0 = keep all)
     var summarySeconds = 10.0       // D4: stdout SUM period and summary-level MEM decimation period
     var headless = false            // D5
     var duration: Double? = nil     // D5: headless run length (seconds); nil = until SIGINT/SIGTERM
@@ -72,6 +73,7 @@ struct Config: Sendable, Equatable {
                                values change within N s (or the case's BLE link is connected); 0 disables (default 300)
       --page-seconds S         AirPods page rotation in seconds (default 8)
       --log-level summary|sample  log volume (default summary; see README)
+      --log-retention-days N   delete earlier runs' panel-/stdout- logs older than N days (default 30, 0 = keep all)
       --summary-seconds N      stdout SUM period and summary-level MEM decimation (default 10)
       --headless [--duration S]  sampling + injector + logging + audit without any window; exits after S s or on SIGINT/SIGTERM
       --selftest               run built-in self tests and exit (0 = pass)
@@ -137,6 +139,7 @@ struct Config: Sendable, Equatable {
                 guard let l = LogLevel(rawValue: s) else { throw ParseError(description: "--log-level \(s): expected summary|sample") }
                 c.logLevel = l
             case "--summary-seconds": c.summarySeconds = try number(a, 1...3600)
+            case "--log-retention-days": c.logRetentionDays = try number(a, 0...3650)
             case "--headless": c.headless = true
             case "--duration": c.duration = try number(a, 0.1...(30 * 86_400))
             case "--selftest": c.selftest = true
@@ -225,7 +228,7 @@ enum ConfigSelfTest {
         expect("defaults", []) { c in
             c.logDir == "logs" && c.runDir == "run" && c.memHz == 4 && c.auditHz == 0.2 && c.spPeriod == 20
                 && c.spPath == "/usr/sbin/system_profiler" && c.breakMIBs.isEmpty && c.displayID == nil && c.focusRestore
-                && !c.hidTrustNotify && c.offlineGrace == 600 && c.nearbyFreshSeconds == 300 && c.pageSeconds == 8 && c.logLevel == .summary
+                && !c.hidTrustNotify && c.offlineGrace == 600 && c.nearbyFreshSeconds == 300 && c.pageSeconds == 8 && c.logLevel == .summary && c.logRetentionDays == 30
                 && c.summarySeconds == 10 && c.mode == .app && c.autoRecover && c.autoRecoverStableSeconds == 3
         }
         expect("all", ["--log-dir", "L", "--run-dir", "R", "--mem-hz", "2", "--audit-hz", "1", "--sp-period", "30",
@@ -257,6 +260,8 @@ enum ConfigSelfTest {
                                          home: home, exists: { $0 == "/Users/u/scripts/start.sh" }).path]
         let support = "/Users/u/Library/Application Support/WokyisPanel"
         out.append(SelfTestCase("config.relative_base", bases == ["/src/wp", "/src/wp", support, support, support], "\(bases)"))
+        expect("log_retention_days", ["--log-retention-days", "0"]) { $0.logRetentionDays == 0 }
+        reject("log_retention_days", ["--log-retention-days", "-1"])
         reject("memhz", ["--mem-hz", "11"])
         reject("audit>mem", ["--mem-hz", "1", "--audit-hz", "2"])
         reject("level", ["--log-level", "verbose"])

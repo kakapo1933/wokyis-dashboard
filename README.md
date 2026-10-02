@@ -192,7 +192,7 @@ scripts/start.sh
 
 **重設設定**：先 `scripts/stop.sh`，再執行 `defaults delete io.github.kakapo1933.wokyis-panel`，下次啟動回到預設值。只看目前值：`defaults read io.github.kakapo1933.wokyis-panel`。
 
-**log 不會自動刪除**。`logs/` 超過 1 GB 時，啟動時與之後每小時最多一次記 `WARN log_dir_mb=…`；是否刪舊檔由使用者決定。`build/ logs/ run/ tools/bin/ dist/` 都在 `.gitignore`。
+**log 自動保留最近 30 天**：啟動時與之後每小時一次，刪除 log 資料夾裡最後修改超過 30 天的 `panel-*.log` 與 `stdout-*.log`（記一行 `LOG event=pruned files= mb= older_than_days=30`）；這次執行正在寫的檔案與其他任何檔案都不動。`--log-retention-days N` 可改天數，`0` 表示不刪。清理後 log 資料夾仍超過 1 GB 時，同樣每小時最多一次記 `WARN log_dir_mb=…`。`build/ logs/ run/ tools/bin/ dist/` 都在 `.gitignore`。
 
 ---
 
@@ -662,7 +662,7 @@ scripts/start.sh --sp-path /nonexistent/system_profiler   # spawn 真的失敗 �
 4. **CPU 用量離上限不遠**：驗收規定面板 5 分鐘平均要低於「一顆核心的 2%」（活動監視器「% CPU」欄的算法，2% 約等於每分鐘忙 1.2 秒）。實測記憶體頁最耗，約 1.3–1.7%（最忙的連續 5 分鐘 1.71%）；CPU 頁約 0.9–1.1%、網路頁約 0.7–1.3%，因為這兩頁每秒只更新一次。偶爾單一分鐘會超過 2%，但看的是 5 分鐘平均。記憶體頁的數字預設每秒更新 2 次（記憶體仍每秒讀 4 次給壓力圖用）；以前每秒更新 4 次時曾量到 2.09%，超過上限，所以改成 2 次。想更省，可結束面板後在終端機執行 `open -a WokyisPanel --args --mem-display-hz 1`（只對這次啟動有效）。換算成整台 Mac mini 的負擔不到 0.2%，日常使用感覺不到。
 5. **Space 排列會變**：面板每次啟動都把新 Space 放在 Wokyis 現有 Space 的後面，所以目標 App 不一定緊鄰面板，Ctrl+←／→ 可能要按好幾次。Cmd+Tab／Dock 不受排列影響（第 5 節）。
 6. **閒置鎖屏**：螢幕鎖定或顯示器睡眠時，面板被判為遮蔽、停止繪圖（取樣與 log 照常）。鎖定期間不建窗、不進入全螢幕，解鎖後才自動建立（第 5 節）；只有顯示器睡眠、但未鎖定時的全螢幕失敗仍照一般 `fs_failed` 規則計數。
-7. **log 不會自動刪除**：預設 summary 等級約 5 MB/天、sample 等級約 100–180 MB/天，只有 64 MB 輪替與 1 GB 警告，清理由使用者決定。
+7. **log 只保留最近 30 天**：預設 summary 等級約 5 MB/天（30 天約 150 MB）、sample 等級約 100–180 MB/天；超過 30 天的舊 log 自動刪除（第 4.6 節，`--log-retention-days` 可改）。
 8. **HID 數字依賴 `system_profiler` 新鮮度**：預設 `--hid-trust-notify no`：HID 數字要 `system_profiler` 45 s 內成功才顯示，`system_profiler` 連續失敗時鍵盤／軌跡板會變灰「—」。
 9. **ad-hoc 簽章每次建置都會變**：CDHash 隨每次建置改變。目前沒有使用任何需要 TCC 權限的 API，所以沒有影響；若日後加入，每次重建都可能要重新授權。
 10. **其他**：

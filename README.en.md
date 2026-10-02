@@ -161,6 +161,7 @@ simulation only.
 | `--hotkeys yes\|no` | yes | Register the ⌃⌥⌘ M/P/N/V/B/L hot keys |
 | `--mem-display-hz 4\|2\|1` | 2 | Memory values redrawn at most this often per second (sampling stays at `--mem-hz`) |
 | `--log-level summary\|sample` | summary | Log volume (`sample` is needed by `tools/bin/amcompare`) |
+| `--log-retention-days N` | 30 | Delete earlier runs' logs older than N days (`0` = keep all) |
 | `--snapshot OUT.png [--dump-rects] [--view V] [--lang L] [--battery yes\|no]` | — | Render a fixture offscreen once and exit |
 
 `WokyisPanel --help` lists every option.
@@ -207,6 +208,7 @@ carries `sim=1`. Source ids and rules: [README.md section 10](README.md#10-模�
   `open -a WokyisPanel --args --mem-display-hz 1` (this launch only). For the whole Mac mini this is under 0.2 %.
 - The menu bar and the full-screen title bar slide over the top ~60 px when the pointer touches the top edge of the
   Wokyis.
-- Logs are never deleted automatically.
+- Logs are kept for 30 days: at start and hourly, `panel-*.log` / `stdout-*.log` last modified more than 30 days ago
+  are deleted (`LOG event=pruned`); `--log-retention-days N` changes it, `0` keeps everything.
 
 Full list: [README.md section 11](README.md#11-已知限制).

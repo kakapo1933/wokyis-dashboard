@@ -2,7 +2,9 @@
 //
 // * One serial queue (logQ) owns the file descriptor; every line is ONE write(2) (no user-space buffering,
 //   a crash loses no completed line).
-// * File: <dir>/panel-YYYYMMDD-HHMMSS.log, rotated at 64 MB to …-001.log, …-002.log; files are NEVER deleted.
+// * File: <dir>/panel-YYYYMMDD-HHMMSS.log, rotated at 64 MB to …-001.log, …-002.log. Retention: panel-*.log and
+//   stdout-*.log (scripts/start.sh) last modified more than `retentionDays` ago (default 30; 0 = keep all) are deleted
+//   at start and at most once per hour (`LOG event=pruned`); the files of this run and anything else are never touched.
 //   <dir>/current.log is a relative symlink to the file being written (replaced atomically with rename(2)).
 // * Levels (D4):  sample  = every line as given.
 //                 summary = MEM, CPU and NET each decimated to one line per `summarySeconds` (by the line's own
@@ -14,7 +16,7 @@
 //   draining (paused terminal, pager) never blocks logQ, the file or any q.sync caller; lines beyond the backlog are
 //   dropped from stdout only (file line `WARN stdout_blocked dropped_total=N`, at most once per 60 s).
 // * Throttles (MEM/AUD decimation, SUM) pass and restart when the wall clock stepped backwards.
-// * `logs/` larger than 1 GB → `WARN log_dir_mb=…` at start and at most once per hour.
+// * `logs/` larger than 1 GB (after pruning) → `WARN log_dir_mb=…` at start and at most once per hour.
 // Owner: core.
 import Foundation
 
@@ -24,6 +26,7 @@ final class EventLog: @unchecked Sendable {
     let summarySeconds: Double
     let rotateBytes: Int
     let echoStdout: Bool
+    let retentionDays: Double
     static let dirWarnBytes: Int64 = 1 << 30
     static let fileOnlyKinds: Set<String> = ["MEM", "DSP", "AUD", "BAT", "CPU", "NET"]
     /// Kinds decimated to one line per `summarySeconds` at summary level.
@@ -58,7 +61,8 @@ final class EventLog: @unchecked Sendable {
 
     /// `linkCurrent` false: never touch current.log (a launch refused because another panel runs keeps that panel's link).
     init(dir: URL, level: LogLevel = .summary, summarySeconds: Double = 10, rotateBytes: Int = 64 << 20,
-         echoStdout: Bool = true, stdoutFD: Int32 = 1, now: Date = Date(), linkCurrent: Bool = true) throws {
+         echoStdout: Bool = true, stdoutFD: Int32 = 1, now: Date = Date(), linkCurrent: Bool = true, retentionDays: Double = 30) throws {
+        self.retentionDays = retentionDays
         self.dir = dir; self.level = level; self.summarySeconds = summarySeconds; self.stdoutFD = stdoutFD
         self.linkCurrent = linkCurrent
         self.rotateBytes = max(1024, rotateBytes); self.echoStdout = echoStdout
@@ -250,7 +254,37 @@ final class EventLog: @unchecked Sendable {
         if symlink(fileName(rotation), tmp) == 0 { if rename(tmp, link) != 0 { _ = unlink(tmp) } }
     }
 
+    /// Log files of earlier runs older than `days` (by modification time): panel-YYYYMMDD-HHMMSS[-NNN].log and
+    /// stdout-YYYYMMDD-HHMMSS.log only, never a name in `keep` (this run's files). days <= 0 → none.
+    static func expired(_ files: [(name: String, modified: Date)], now: Date, days: Double, keep: Set<String>) -> [String] {
+        guard days > 0 else { return [] }
+        let cutoff = now.addingTimeInterval(-days * 86_400)
+        return files.filter { f in
+            !keep.contains(f.name) && f.modified < cutoff
+                && f.name.range(of: #"^(panel-\d{8}-\d{6}(-\d{3})?|stdout-\d{8}-\d{6})\.log$"#, options: .regularExpression) != nil
+        }.map(\.name).sorted()
+    }
+
+    private func prune(_ at: Date) {
+        guard retentionDays > 0,
+              let items = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey, .fileSizeKey])
+        else { return }
+        var files: [(name: String, modified: Date)] = [], sizes: [String: Int] = [:]
+        for u in items {
+            guard let v = try? u.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey, .fileSizeKey]),
+                  v.isRegularFile == true, let m = v.contentModificationDate else { continue }
+            files.append((u.lastPathComponent, m)); sizes[u.lastPathComponent] = v.fileSize ?? 0
+        }
+        let keep = Set((0...rotation).map(fileName))
+        var removed = 0, bytes = 0
+        for name in EventLog.expired(files, now: at, days: retentionDays, keep: keep)
+        where unlink(dir.appendingPathComponent(name).path) == 0 { removed += 1; bytes += sizes[name] ?? 0 }
+        guard removed > 0 else { return }
+        writeFile("LOG", EventLog.timestamp(at) + " LOG event=pruned files=\(removed) mb=\(bytes >> 20) older_than_days=\(Int(retentionDays))\n")
+    }
+
     private func checkDirSize(_ at: Date) {
+        prune(at)
         guard let items = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) else { return }
         var total: Int64 = 0
         for u in items {
@@ -459,6 +493,16 @@ enum EventLogSelfTest {
             let s = String(decoding: (try? Data(contentsOf: log.currentFile)) ?? Data(), as: UTF8.self)
             out.append(SelfTestCase("eventlog.sim_tag", s.contains("dev=x pct=1 sim=1\n") && s.contains("dev=y pct=2 sim=0\n") && !s.contains("sim=0 sim=1")))
         } catch { out.append(SelfTestCase("eventlog.sim", false, "\(error)")) }
+        // retention: only this app's log names, older than the cutoff, never this run's files
+        let day = 86_400.0
+        let fs: [(name: String, modified: Date)] = [("panel-20260801-120000.log", t0.addingTimeInterval(-40 * day)),
+            ("panel-20260801-120000-001.log", t0.addingTimeInterval(-31 * day)), ("stdout-20260801-120000.log", t0.addingTimeInterval(-35 * day)),
+            ("panel-20260920-120000.log", t0.addingTimeInterval(-12 * day)), ("current.log", t0.addingTimeInterval(-90 * day)),
+            ("notes.txt", t0.addingTimeInterval(-90 * day)), ("panel-old.log", t0.addingTimeInterval(-90 * day)),
+            ("panel-20260701-000000.log", t0.addingTimeInterval(-60 * day))]
+        let ex = EventLog.expired(fs, now: t0, days: 30, keep: ["panel-20260701-000000.log"])
+        out.append(SelfTestCase("eventlog.retention", ex == ["panel-20260801-120000-001.log", "panel-20260801-120000.log", "stdout-20260801-120000.log"]
+                                && EventLog.expired(fs, now: t0, days: 0, keep: []).isEmpty, "\(ex)"))
         return out
     }
 }

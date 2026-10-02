@@ -414,7 +414,9 @@ enum EventLogSelfTest { static func run(dir: URL) -> [SelfTestCase] }
 ```
 Line = `<timestamp> <KIND> <body>\n`, one `write(2)` per line on logQ. Pass `at:` = sample START time for MEM.
 Files `logs/panel-YYYYMMDD-HHMMSS.log`, then `-001.log`, `-002.log` … at 64 MB; `logs/current.log` → relative symlink;
-nothing is ever deleted; `WARN log_dir_mb=` when logs/ > 1 GB (start + hourly).
+retention (`retentionDays`, `--log-retention-days`, default 30, 0 = off): at start and hourly `panel-*.log` / `stdout-*.log`
+modified more than N days ago are deleted, never this run's files (`static func expired(_:now:days:keep:)`,
+`LOG event=pruned files= mb= older_than_days=`); `WARN log_dir_mb=` when logs/ > 1 GB after pruning (start + hourly).
 **Levels (D4)**: `summary` (default) → MEM kept only when ≥ summarySeconds after the last kept MEM (by `at`), DSP dropped,
 AUD ≤ 1 per 60 s, every other kind kept. `sample` → everything.
 Measured (README §4.5): summary ≈ 5.3 MB/day with keyboard + trackpad, sample ≈ 101 MB/day without DSP, ≤ 180 MB/day with DSP. Original estimate: summary ≈ 5–10 MB/day (MEM 8 640 × ~330 B ≈ 2.9 MB,

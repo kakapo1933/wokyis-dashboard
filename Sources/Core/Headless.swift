@@ -106,7 +106,8 @@ enum Headless {
     static func run(config: Config) -> Never {
         let log: EventLog
         do {
-            log = try EventLog(dir: config.logDirURL, level: config.logLevel, summarySeconds: config.summarySeconds)
+            log = try EventLog(dir: config.logDirURL, level: config.logLevel, summarySeconds: config.summarySeconds,
+                               retentionDays: config.logRetentionDays)
         } catch {
             FileHandle.standardError.write(Data("WokyisPanel: cannot open log dir \(config.logDirURL.path): \(error)\n".utf8))
             exit(73)
