@@ -2,6 +2,8 @@
 // Memory + battery sampling, injector, logging and audit WITHOUT NSApplication (no window, no Dock icon):
 // the main thread runs a plain CFRunLoop (so main-queue blocks and main-run-loop IOPS notifications still fire).
 // Exits after S seconds or on SIGINT/SIGTERM/SIGHUP (second SIGINT → 130; SIGHUP stays ignored under nohup). Used for gate G2 and tests.
+// v2: the SystemSampler runs too (CPU / NET log lines, SUM cpu= net=); no status item, no hot keys, never reads or
+// writes UserDefaults — --view / --lang / --battery only appear on the START line and in SUM (spec §7, §8.3).
 // Owner: core.
 import Foundation
 
@@ -11,6 +13,10 @@ final class HeadlessRunner: @unchecked Sendable {   // state touched on main onl
     let injector: Injector
     private var sampler: MemorySampler?
     private var battery: BatteryMonitor?
+    private var sys: SystemSampler?
+    private var latestSys: SysSample?
+    private var sysSamples: UInt64 = 0
+    private let view: ViewKind
     private var signals: Signals?
     private var tick: DispatchSourceTimer?
     // main-thread state
@@ -24,8 +30,8 @@ final class HeadlessRunner: @unchecked Sendable {   // state touched on main onl
 
     let table: SysctlTable
 
-    init(config: Config, log: EventLog, injector: Injector, table: SysctlTable) {
-        self.config = config; self.log = log; self.injector = injector; self.table = table
+    init(config: Config, log: EventLog, injector: Injector, table: SysctlTable, view: ViewKind = .memory) {
+        self.config = config; self.log = log; self.injector = injector; self.table = table; self.view = view
     }
 
     func start() {
@@ -38,6 +44,9 @@ final class HeadlessRunner: @unchecked Sendable {   // state touched on main onl
         }
         sampler = s; battery = b
         s.start(); b.start()
+        let sy = SystemSampler(injector: injector, log: log) { [weak self] x in self?.latestSys = x; self?.sysSamples += 1 }   // on main
+        sys = sy
+        sy.start()
 
         let sig = Signals(queue: .main) { [weak self] n in self?.shutdown(reason: Signals.name(n)) }
         sig.install([SIGINT, SIGTERM, SIGHUP])
@@ -61,7 +70,7 @@ final class HeadlessRunner: @unchecked Sendable {   // state touched on main onl
     }
 
     private func tick1Hz(_ now: Date) {
-        log.summary(SummaryFormat.body(sample: latest, groups: groups, sim: injector.active), at: now)
+        log.summary(SummaryFormat.body(sample: latest, groups: groups, sim: injector.active, sys: latestSys, view: view), at: now)
         if !EventLog.throttled(now, lastHist, 60.05) {
             lastHist = now
             let p = history.points()
@@ -72,8 +81,10 @@ final class HeadlessRunner: @unchecked Sendable {   // state touched on main onl
             lastHealth = now
             let h = ProcessHealth.sample()
             let st = log.stats()
+            let ss = sys?.stats()
             log.line("HEALTH", String(format: "cpu_s=%.3f footprint_mb=%.1f rss_mb=%.1f draws=0 draw_ms_avg=- timer_late_p99_ms=- occluded=- log_mb=%.2f samples=%llu mode=headless",
-                                      h?.cpuSeconds ?? -1, h?.footprintMB ?? -1, h?.rssMB ?? -1, Double(st.bytes) / 1_048_576, samples))
+                                      h?.cpuSeconds ?? -1, h?.footprintMB ?? -1, h?.rssMB ?? -1, Double(st.bytes) / 1_048_576, samples)
+                     + " view=\(view.token) mem_hz=\(StartInfo.fmt(config.memHz)) passes=0 sys_dur_us_p99=\(ss?.durP99Us.map { String($0) } ?? "-") sys_samples=\(ss?.samples ?? 0)")
         }
     }
 
@@ -82,9 +93,10 @@ final class HeadlessRunner: @unchecked Sendable {   // state touched on main onl
         stopping = true
         tick?.cancel()
         sampler?.stop()
+        sys?.stop()
         battery?.stop()
         injector.stop()
-        log.event("STOP", "reason=\(reason) uptime_s=\(Int(Date().timeIntervalSince(StartInfo.launchedAt))) samples=\(samples)")
+        log.event("STOP", "reason=\(reason) uptime_s=\(Int(Date().timeIntervalSince(StartInfo.launchedAt))) samples=\(samples) sys_samples=\(sysSamples)")
         log.flushSync()
         exit(0)
     }
@@ -103,10 +115,11 @@ enum Headless {
         log.simActive = { injector.active }
         let quick = SelfTest.runQuick()
         let table = SysctlTable(names: SysctlTable.standardNames, broken: Set(config.breakMIBs))
+        let ui = SettingsModel(stored: SettingsLayer(), cli: config.cliLayer, store: nil)   // no UserDefaults in headless
         log.event("START", StartInfo.startBody(config: config, mode: .headless, selftest: quick.ok ? "ok" : "fail:" + quick.failed.joined(separator: ","),
-                                               mibs: "\(table.resolvedCount)/\(table.names.count)")
+                                               mibs: "\(table.resolvedCount)/\(table.names.count)", ui: ui)
                   + " log=\(EventLog.q(log.currentFile.path))")
-        let runner = HeadlessRunner(config: config, log: log, injector: injector, table: table)
+        let runner = HeadlessRunner(config: config, log: log, injector: injector, table: table, view: ui.effective.view)
         runner.start()
         withExtendedLifetime(runner) { CFRunLoopRun() }
         exit(0)

@@ -181,7 +181,15 @@ enum ControlState {
 // MARK: - panel log (MEM / DSP)
 
 struct PanelMEM { let t: Double; let seq: UInt64; let strings: [MemField: String]; let pct: String; let lvl: String; let sim: Bool; let raw: String }
-struct PanelDSP { let t: Double; let seq: UInt64; let memSeq: UInt64; let clock: String; let sim: Bool; let raw: String }
+/// v2: `view` = the DSP `view=` token ("mem" when absent, v1 logs). A CPU / network commit (mem_seq=-) stays in the
+/// timeline — it ends the on-screen interval of the memory commit before it — but never matches (memSeq 0).
+struct PanelDSP { let t: Double; let seq: UInt64; let memSeq: UInt64; let clock: String; let sim: Bool; let raw: String; var view: String = "mem"
+    var lang = "zh", batv = "1"     // v1 lines carry no view / lang / batv → the v1 layout (mem / zh / 1)
+    var isMemory: Bool { view == "mem" }
+    /// The layout PanelRegions.columns and the clock / battery crops were measured on (v1: memory, zh, battery shown).
+    var isOCRLayout: Bool { view == "mem" && lang == "zh" && batv == "1" }
+    var layoutTokens: String { "view=\(view) lang=\(lang) batv=\(batv)" }
+}
 struct PanelLog { var mem: [UInt64: PanelMEM] = [:]; var dsp: [PanelDSP] = []; var lines: [(Double, String)] = []; var startLevel: String?; var startT: Double? }
 
 enum LogParse {
@@ -258,8 +266,16 @@ enum LogParse {
                 out.mem[seq] = PanelMEM(t: t, seq: seq, strings: st, pct: kv["pct"] ?? "—", lvl: kv["lvl"] ?? "-", sim: kv["sim"] == "1", raw: String(raw))
             } else if kind == "DSP" {
                 let (kv, _) = body(bodyStr)
-                guard let seq = kv["seq"].flatMap({ UInt64($0) }), let ms = kv["mem_seq"].flatMap({ UInt64($0) }) else { continue }
-                out.dsp.append(PanelDSP(t: t, seq: seq, memSeq: ms, clock: kv["clock"] ?? "", sim: kv["sim"] == "1", raw: String(raw)))
+                guard let seq = kv["seq"].flatMap({ UInt64($0) }) else { continue }
+                let view = kv["view"] ?? "mem", lang = kv["lang"] ?? "zh", batv = kv["batv"] ?? "1"
+                if view == "mem" {
+                    guard let ms = kv["mem_seq"].flatMap({ UInt64($0) }) else { continue }
+                    out.dsp.append(PanelDSP(t: t, seq: seq, memSeq: ms, clock: kv["clock"] ?? "", sim: kv["sim"] == "1", raw: String(raw),
+                                            lang: lang, batv: batv))
+                } else {
+                    out.dsp.append(PanelDSP(t: t, seq: seq, memSeq: 0, clock: kv["clock"] ?? "", sim: kv["sim"] == "1", raw: String(raw), view: view,
+                                            lang: lang, batv: batv))
+                }
             }
         }
         out.dsp.sort { $0.t < $1.t }
@@ -281,7 +297,7 @@ enum Join {
     }
     /// Panel strings in field order + pressure percent.
     static func expected(_ d: PanelDSP, _ mem: [UInt64: PanelMEM]) -> (strings: [String], pct: String, mem: PanelMEM)? {
-        guard let m = mem[d.memSeq] else { return nil }
+        guard d.isMemory, let m = mem[d.memSeq] else { return nil }   // CPU / network commits never match
         return (MemField.allCases.map { m.strings[$0] ?? "—" }, m.pct, m)
     }
     /// First eligible DSP whose strings equal the OCR'd panel strings (7 fields + pressure %).
@@ -393,6 +409,19 @@ enum LogicTests {
         expect("join no match", Join.match(ocr: ocrA, ocrPct: "49", eligible: e1, mem: pl.mem) == nil
                && Join.match(ocr: ocrA, ocrPct: "48", eligible: [pl.dsp[0]], mem: pl.mem) == nil)
         expect("ts offset", abs(t("2026-10-01T05:07:13.250+08:00") - t("2026-09-30T21:07:13.250Z")) < 1e-9)
+        // v2: only view=mem DSP lines join; a CPU commit ends the memory commit's on-screen interval and never matches
+        let log2 = log.replacingOccurrences(of: "garbage line", with: """
+        2026-10-01T05:07:13.400+08:00 DSP seq=13 mem_seq=- sys_seq=5 clock=05:07:13 regions=all bat="hidden" page=1/1 stale=0 draw_us=1 view=cpu lang=en batv=0 sim=0
+        """).replacingOccurrences(of: "regions=used page=1/1 stale=0 sim=0", with: "regions=used page=1/1 stale=0 view=mem lang=zh batv=1 sim=0")
+        let pl2 = LogParse.parse(log2)
+        let e4 = Join.eligible(pl2.dsp, cap0: t("2026-10-01T05:07:13.550+08:00"), cap1: t("2026-10-01T05:07:13.700+08:00"))
+        expect("v2 view filter", pl2.dsp.count == 4 && pl2.dsp.filter(\.isMemory).count == 3 && e4.map { $0.seq } == [13]
+               && Join.match(ocr: ocrA, ocrPct: "48", eligible: e4, mem: pl2.mem) == nil
+               && Join.match(ocr: ocrA, ocrPct: "48", eligible: Join.eligible(pl2.dsp, cap0: t("2026-10-01T05:07:13.300+08:00"), cap1: t("2026-10-01T05:07:13.350+08:00")), mem: pl2.mem)?.0.seq == 11,
+               "\(pl2.dsp.map { "\($0.seq):\($0.view)" }) e4=\(e4.map { $0.seq })")
+        // OPS-1: the OCR crops are the v1 memory / zh / battery layout; v1 lines (no tokens) count as that layout
+        expect("dsp layout tokens", pl2.dsp.map(\.isOCRLayout) == [true, true, false, true] && pl2.dsp[2].layoutTokens == "view=cpu lang=en batv=0"
+               && pl.dsp.allSatisfy(\.isOCRLayout), "\(pl2.dsp.map(\.layoutTokens))")
         print("amcompare unittest: \(ok ? "all \(n) passed" : "FAILED")")
         return ok
     }

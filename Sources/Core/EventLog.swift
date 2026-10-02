@@ -5,9 +5,11 @@
 // * File: <dir>/panel-YYYYMMDD-HHMMSS.log, rotated at 64 MB to …-001.log, …-002.log; files are NEVER deleted.
 //   <dir>/current.log is a relative symlink to the file being written (replaced atomically with rename(2)).
 // * Levels (D4):  sample  = every line as given.
-//                 summary = MEM decimated to one line per `summarySeconds` (by the line's own timestamp),
-//                           DSP dropped, AUD at most one per 60 s, every other kind kept.
-// * stdout: `event()` lines (except MEM/DSP/AUD/BAT) and `summary()` (SUM, at most one per `summarySeconds`).
+//                 summary = MEM, CPU and NET each decimated to one line per `summarySeconds` (by the line's own
+//                           timestamp), DSP dropped, AUD at most one per 60 s, every other kind kept.
+// * `accepts(kind, at:)` (v2, spec §9.1): would a line of this kind be written now? Callers ask BEFORE composing an
+//   expensive line (PanelView's DSP, the SystemSampler's CPU / NET). Lock-protected read of the decimation state.
+// * stdout: `event()` lines (except MEM/DSP/AUD/BAT/CPU/NET) and `summary()` (SUM, at most one per `summarySeconds`).
 //   stdout is written from its own queue (outQ) AFTER the file write, with a bounded backlog: a stdout that stops
 //   draining (paused terminal, pager) never blocks logQ, the file or any q.sync caller; lines beyond the backlog are
 //   dropped from stdout only (file line `WARN stdout_blocked dropped_total=N`, at most once per 60 s).
@@ -23,7 +25,9 @@ final class EventLog: @unchecked Sendable {
     let rotateBytes: Int
     let echoStdout: Bool
     static let dirWarnBytes: Int64 = 1 << 30
-    static let fileOnlyKinds: Set<String> = ["MEM", "DSP", "AUD", "BAT"]
+    static let fileOnlyKinds: Set<String> = ["MEM", "DSP", "AUD", "BAT", "CPU", "NET"]
+    /// Kinds decimated to one line per `summarySeconds` at summary level.
+    static let decimatedKinds: Set<String> = ["MEM", "CPU", "NET"]
     static let stdoutBacklogMax = 512
     let stdoutFD: Int32
 
@@ -43,8 +47,8 @@ final class EventLog: @unchecked Sendable {
     private var rotation = 0
     private var fileBytes = 0
     private var totalBytes: Int64 = 0
-    private var lastMem: Date?
-    private var lastAud: Date?
+    private let lastLock = NSLock()
+    private var lastKept: [String: Date] = [:]   // lastLock: last written line per decimated kind (MEM / CPU / NET / AUD)
     private var lastSum: Date?
     private var lastDirCheck: Date?
     private var writeErrorReported = false
@@ -148,18 +152,30 @@ final class EventLog: @unchecked Sendable {
         return d >= 0 && d < every - 0.05
     }
 
+    /// Decimation period of a kind at summary level (nil = always kept; DSP is handled separately: always dropped).
+    private func period(_ kind: String) -> Double? {
+        if EventLog.decimatedKinds.contains(kind) { return summarySeconds }
+        return kind == "AUD" ? 60 : nil
+    }
+
+    /// true = a `line(kind, …, at:)` issued now would be written (level filter + decimation). Any thread; never blocks
+    /// on logQ. The answer can be stale by one line when two threads race on the same kind (harmless: the line is then
+    /// dropped by the level filter on logQ).
+    func accepts(_ kind: String, at: Date = Date()) -> Bool {
+        guard level == .summary else { return true }
+        if kind == "DSP" { return false }
+        guard let p = period(kind) else { return true }
+        lastLock.lock(); let l = lastKept[kind]; lastLock.unlock()
+        return !EventLog.throttled(at, l, p)
+    }
+
     private func passesLevel(_ kind: String, _ at: Date) -> Bool {
         guard level == .summary else { return true }
-        switch kind {
-        case "DSP": return false
-        case "MEM":
-            if EventLog.throttled(at, lastMem, summarySeconds) { return false }
-            lastMem = at; return true
-        case "AUD":
-            if EventLog.throttled(at, lastAud, 60) { return false }
-            lastAud = at; return true
-        default: return true
-        }
+        if kind == "DSP" { return false }
+        guard let p = period(kind) else { return true }
+        lastLock.lock(); defer { lastLock.unlock() }
+        if EventLog.throttled(at, lastKept[kind], p) { return false }
+        lastKept[kind] = at; return true
     }
 
     private func write(kind: String, text: String, at: Date, stdout: Bool) {
@@ -388,6 +404,46 @@ enum EventLogSelfTest {
             if pendingLeft == 0 { Darwin.close(w) }   // never close an fd a queued write may still use (fd reuse)
             Darwin.close(r)
         } else { out.append(SelfTestCase("eventlog.stdout_blocked", false, "pipe errno=\(errno)")) }
+
+        // 3d. v2 CPU / NET (spec §9.1, eventlog.cpu_net): summary level decimates each kind on its own clock, sample keeps
+        //     every line, neither is ever echoed to stdout; accepts() predicts the filter (DSP false at summary)
+        let d2c = dir.appendingPathComponent("cpunet")
+        var pfd2: [Int32] = [-1, -1]
+        if pipe(&pfd2) == 0 {
+            _ = fcntl(pfd2[0], F_SETFL, fcntl(pfd2[0], F_GETFL) | O_NONBLOCK)
+            do {
+                let sum = try EventLog(dir: d2c.appendingPathComponent("summary"), level: .summary, summarySeconds: 10, echoStdout: true, stdoutFD: pfd2[1], now: t0)
+                var acc: [Bool] = []
+                for i in 0..<30 {
+                    let at = t0.addingTimeInterval(Double(i))
+                    acc.append(sum.accepts("CPU", at: at))
+                    sum.event("CPU", "seq=\(i)", at: at)
+                    sum.flushSync()                                     // accepts() must see the previous line
+                    sum.line("NET", "seq=\(i)", at: at.addingTimeInterval(0.5))
+                }
+                let dspAcc = sum.accepts("DSP"), winAcc = sum.accepts("WIN")
+                sum.flushSync()
+                let s = String(decoding: (try? Data(contentsOf: sum.currentFile)) ?? Data(), as: UTF8.self)
+                let cpu = s.split(separator: "\n").filter { $0.contains(" CPU ") }.map { String($0.split(separator: " ").last ?? "") }
+                let net = s.split(separator: "\n").filter { $0.contains(" NET ") }.map { String($0.split(separator: " ").last ?? "") }
+                let sample = try EventLog(dir: d2c.appendingPathComponent("sample"), level: .sample, echoStdout: true, stdoutFD: pfd2[1], now: t0)
+                for i in 0..<30 { sample.event("CPU", "seq=\(i)", at: t0.addingTimeInterval(Double(i))); sample.line("NET", "seq=\(i)", at: t0.addingTimeInterval(Double(i))) }
+                let sampleAcc = sample.accepts("CPU") && sample.accepts("DSP")
+                sample.flushSync()
+                usleep(50_000)
+                let s2 = String(decoding: (try? Data(contentsOf: sample.currentFile)) ?? Data(), as: UTF8.self)
+                var buf = [UInt8](repeating: 0, count: 65536)
+                let n = buf.withUnsafeMutableBytes { Darwin.read(pfd2[0], $0.baseAddress, 65536) }
+                let echoed = n > 0 ? String(decoding: buf.prefix(n), as: UTF8.self) : ""
+                let accExpect = (0..<30).map { $0 % 10 == 0 }
+                out.append(SelfTestCase("eventlog.cpu_net", cpu == ["seq=0", "seq=10", "seq=20"] && net == ["seq=0", "seq=10", "seq=20"]
+                                        && acc == accExpect && !dspAcc && winAcc && sampleAcc
+                                        && s2.components(separatedBy: " CPU ").count - 1 == 30 && s2.components(separatedBy: " NET ").count - 1 == 30
+                                        && !echoed.contains(" CPU ") && !echoed.contains(" NET "),
+                                        "cpu=\(cpu) net=\(net) acc_ok=\(acc == accExpect) dsp=\(dspAcc) echoed=\(echoed.count)"))
+            } catch { out.append(SelfTestCase("eventlog.cpu_net", false, "\(error)")) }
+            Darwin.close(pfd2[0]); Darwin.close(pfd2[1])
+        } else { out.append(SelfTestCase("eventlog.cpu_net", false, "pipe errno=\(errno)")) }
 
         // 4. sim=1 auto-append
         let d3 = dir.appendingPathComponent("sim")

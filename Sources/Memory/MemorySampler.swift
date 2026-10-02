@@ -17,11 +17,14 @@
 //   60 s while it persists (line), RECOVER when it clears; WARN (formula guards / fallbacks) at most once per 60 s per key.
 // * Audit: on the first tick and then every round(memHz/auditHz) ticks, after the sample: injector.check(.memAudit) → HostAudit.run → AUD line;
 //   mode switches → `WARN free_mode from=… to=… median=… reason=…`. The audit reads REAL sysctl values (no injection).
+// * v2 setHz(_:) (spec §5.4, owner: sampler agent): the rate is a memQ-only var; switching (4 ↔ 1 Hz) recomputes
+//   auditEvery (auditHz 0 → off, no Int(inf) trap), clamps ticksSinceAudit so a longer audit period never postpones
+//   the next audit by more than one period, resets lastBoundary and re-arms on the new grid.
 // Owner: memory agent.
 import Foundation
 
 final class MemorySampler: @unchecked Sendable {
-    let hz: Double
+    private(set) var hz: Double                      // memQ only after init (setHz); read with currentHz()
     let auditHz: Double
     let table: SysctlTable
     let injector: Injector
@@ -33,7 +36,7 @@ final class MemorySampler: @unchecked Sendable {
     private let full: SysctlTable                    // table.names + vm.page_speculative_count (audit bracket)
     private let tickNames: [String]
     private let audit: HostAudit
-    private let auditEvery: Int                      // 0 = off
+    private var auditEvery: Int                      // 0 = off (memQ only)
     private var pageSize: Int64 = 16384
     private var timer: DispatchSourceTimer?
     private var running = false
@@ -57,7 +60,38 @@ final class MemorySampler: @unchecked Sendable {
         if !names.contains(HostAudit.specName) { names.append(HostAudit.specName) }
         full = SysctlTable(names: names, broken: table.broken)
         tickNames = table.names.filter { $0 != "hw.pagesize" }
-        auditEvery = auditHz > 0 ? max(1, Int((hz / auditHz).rounded())) : 0
+        auditEvery = MemorySampler.auditEvery(hz: hz, auditHz: auditHz)
+    }
+
+    // MARK: sampling rate (v2, spec §5.4)
+
+    /// Ticks between audits; 0 = audits off (auditHz ≤ 0, e.g. `--audit-hz 0`).
+    static func auditEvery(hz: Double, auditHz: Double) -> Int {
+        auditHz > 0 && hz > 0 ? max(1, Int((hz / auditHz).rounded())) : 0
+    }
+
+    /// New (auditEvery, ticksSinceAudit) after a rate change: the counter is clamped to `auditEvery − 1`, so the next
+    /// audit comes at most one (new) audit period later.
+    static func retune(hz: Double, auditHz: Double, ticksSinceAudit: Int) -> (auditEvery: Int, ticksSinceAudit: Int) {
+        let every = auditEvery(hz: hz, auditHz: auditHz)
+        return (every, min(ticksSinceAudit, max(0, every - 1)))
+    }
+
+    /// Switch the sampling rate (4 ↔ 1 Hz; AppController: memory view visible → config.memHz, otherwise
+    /// min(1, config.memHz)). Runs on memQ (async; callers on main never wait). Ignores non-positive / unchanged rates.
+    func setHz(_ newHz: Double) {
+        memQ.async { [weak self] in self?.applyHz(newHz) }
+    }
+
+    /// Current sampling rate (HEALTH `mem_hz=`). Must not be called on memQ.
+    func currentHz() -> Double { memQ.sync { hz } }
+
+    private func applyHz(_ newHz: Double) {
+        guard newHz.isFinite, newHz > 0, newHz != hz else { return }
+        hz = newHz
+        (auditEvery, ticksSinceAudit) = MemorySampler.retune(hz: newHz, auditHz: auditHz, ticksSinceAudit: ticksSinceAudit)
+        lastBoundary = 0
+        if running { arm() }
     }
 
     // MARK: lifecycle

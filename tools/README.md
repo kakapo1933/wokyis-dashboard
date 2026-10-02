@@ -3,17 +3,25 @@
 Swift 6.3.3 (`-parse-as-library`), Apple frameworks only (CoreGraphics / ImageIO / CoreText / AppKit fonts / Vision / libproc). No network, no sudo, no third-party code.
 Build: `tools/build.sh` (also run at the end of `scripts/build.sh`) → binaries in `tools/bin/` (gitignored):
 - `glyphheight fontcal ocr procstat composite`: `swiftc -O -parse-as-library src/Common.swift src/<Tool>.swift -o bin/<tool>`
-- `mockup`: `Sources/Render/PanelModel.swift Sources/Render/PanelRenderer.swift src/Mockup.swift` (the app's renderer, unmodified)
+- `mockup`: `Sources/Render/{PanelModel,PanelRenderer,PanelRenderer+Views,L10n}.swift src/Mockup.swift` (the app's renderer, unmodified)
 - `amcompare edgecheck winlist logstats`: built when `src/<Tool>.swift` exists, from `src/Common.swift src/<Tool>.swift src/<Tool>+*.swift`
 
 Sources `src/Common.swift GlyphHeight.swift FontCal.swift OCR.swift ProcStat.swift Composite.swift` are the Phase 1 tools copied unchanged;
-`src/Mockup.swift` is the Phase 2 mockup driver copied unchanged. `capture_pair.sh` now calls `tools/bin/composite`.
+`src/Mockup.swift` is the v2 (spec r2) mockup driver: 3 views × zh/en × battery column on/off. `capture_pair.sh` now calls `tools/bin/composite`.
 
 Offscreen layout check (criterion #2, offscreen part):
 ```
-tools/bin/mockup render DIR            # 12 states → DIR/mockup_*.png + DIR/data/*.rects.tsv, layoutProblems() per state (exit 1 if any)
+tools/bin/mockup render DIR [FILTER]   # 12 combos × typ/worst_p1/worst_p2(battery only)/failed_sim/collect_stale_nodev/nearby_huge = 66
+                                       # states → DIR/mockup_<view>_<lang>_<bat|full>_<state>.png + DIR/data/*.{rects,boxes}.tsv +
+                                       # DIR/data/layout_report.txt; per state: layoutProblems(), region redraw == full frame,
+                                       # measure=false == measure=true (exit 1 if any problem)
+tools/bin/mockup check                 # SecondRing.put, badge whole-item collapse, digit guard (11 PASS lines)
+tools/bin/mockup bench [--measure]     # CPU ms per draw (full / values / graph / clock / battery) per combo
+tools/bin/mockup fmt                   # speed / file / percent / compact boundary strings
 tools/mockup_measure.sh DIR            # glyphheight on every mockup with its own rects → DIR/data/*.glyph.tsv, DIR/annotated/*.png
 python3 tools/mockup_summarize.py DIR  # per-element min/max ink height table
+tools/golden_pin.sh [--check] [--out DIR]   # frozen v1 vs current renderer on 21 golden states + app_golden; re-pins
+                                       # Sources/Evidence/GoldenPin.swift only when RGBA + ink boxes agree everywhere
 ```
 
 | tool | purpose | acceptance criterion |
@@ -99,7 +107,8 @@ other apps: CGWindowList, AX attribute reads and `screencapture` only — no cli
 | `bin/logstats` | #6 / G4 update intervals from the panel log | `logstats --selftest` |
 | `bin/amcompare` | #4 AM vs panel harness (pre-registered protocol) | `amcompare unittest`, `amcompare dry-run` |
 | `c2measure.sh` | #2 font heights on the real capture | `c2measure.sh --offline PANEL.png`; gate: `c2measure.sh --from-capture CAP.png --snapshot PREFIX` |
-| `c7_measure.sh` | #7 CPU / memory of the process tree | `c7_measure.sh PID 10 --settle 0 --no-top` |
+| `c7_measure.sh` | #7 CPU / memory of the process tree | `c7_measure.sh PID 10 --settle 0 --no-top`; v2: `c7_measure.sh launch 300 --view cpu` |
+| `c7_ab.sh` | #7 v1 / v2 A/B budget matrix (spec §11.4) | `c7_ab.sh --dry-run`; `c7_ab.sh --summarize DIR` |
 | `injectdemo.sh` | #8 injected + real failures | `injectdemo.sh --plan`; env hooks `SIM SHOT PANEL_LOG PIDFILE DIAG_DIR WAIT_SCALE` |
 | `linkcheck.sh` | #10 README links | `selftest.sh` |
 | `wokyis_shot.sh` | helper: Wokyis-only capture (main-display half of the call discarded) | — |
@@ -135,6 +144,9 @@ SP interval, duration, failures; HIST/HEALTH/ERR/WARN/CTL/DEV/WIN. Intervals nev
 Occlusion timeline: `WIN … occluded=0|1` or `WIN event=occluded|visible` (authoritative), else `HEALTH occluded=N` (coarse),
 or manual `--occluded`. With `log_level=summary` (D4 default) MEM is decimated → the MEM verdict is NOT APPLICABLE and the
 overall result INCOMPLETE: criterion #6 / G4 need a `--log-level sample` run.
+v2: a `## CPU / NET` section (CPU lines, fail / skip counts, sys / user / idle means; NET lines, fail / skip, rx / tx bps
+p50 / p99, `WARN net_counter_reset` count; `UI` event counts), `DSP_regions[view=…]` per view (DSP lines without `view=`
+count as `mem`), HEALTH `passes= view= mem_hz=`; the JSON gains `cpu`, `net`, `ui`, `dsp.regions_by_view`.
 
 ## amcompare (criterion #4)
 ```
@@ -160,6 +172,13 @@ ax_after.json am_ocr.tsv panel_ocr.tsv log_slice.log result.json`. Exit 0 PASS /
 fail-pressure, invalid-am-ocr (i), invalid-panel (ii), slow (iii), ax-fail (iv), control (v), am-colour-unknown (FAIL),
 no-refresh (ABORTED)).
 Note: the first Vision request of a process can take ~1 min (model load); `run` warms it up before protocol.md.
+v2: only `view=mem` DSP lines join (a line without `view=` is a v1 memory commit); a CPU / network commit stays in the
+timeline (it ends the on-screen interval of the memory commit before it) but never matches. The panel rects come from the
+memory-view snapshot, so run criterion #4 with the panel on the memory view — e.g. started with `--view memory --battery yes
+--lang zh` (CLI flags are never saved, spec §7). The dry-run's synthetic DSP lines carry `view=mem lang=zh batv=1`.
+The panel crops (`PanelRegions.columns`, clock / battery crops) are the v1 memory + zh + battery-column layout, so the
+preflight check `panel on memory / 繁體中文 / battery shown` fails unless the last DSP line has `view=mem lang=zh batv=1`
+(a v1 line without the tokens counts as that layout) and names the status-menu setting to change.
 
 ## c2measure.sh (criterion #2)
 `tools/c2measure.sh [--out DIR] [--tag wokyis] [--tries 3]` — SIGUSR1 snapshot → Wokyis-only capture → acceptance
@@ -169,6 +188,12 @@ and every `label.*` element box padded 5 px with `--lines` (`element.tsv`) → `
 try's gate result and per-class minima. `--offline PANEL.png` measures an offscreen render instead (no signal, no capture,
 no gate). `--from-capture CAP.png --snapshot PREFIX` (repeatable; one pair per try, `PREFIX` = `run/snapshot-<ts>`) runs
 the gate and the measurement on existing files (no signal, no capture); the capture is copied to `<tag>-tryN.png`.
+v2: `--render VIEW LANG yes|no` renders the fixture with `build/WokyisPanel.app --snapshot --dump-rects --view VIEW --lang
+LANG --battery yes|no` into `<out>/<tag>-render.png` and measures it like `--offline`. The live / from-capture gate compares
+the memory values, so it applies to the memory view only: a snapshot whose `state.json` names another view is refused
+(exit 2) — measure the CPU / network views with `--render` until a gate for them exists. The gate's crops are the v1 zh +
+battery-column layout, so a memory snapshot with `"lang": "en"` or `"battery_visible": false` is refused too (exit 2, the
+message names the status-menu setting); measure those layouts with `--render memory en|zh yes|no`.
 
 Gate (`amcompare panelocr CAP --rects PREFIX.rects.tsv --state PREFIX.state.json --ref PREFIX.png`, exit 0 = accepted):
 a capture is accepted when every gated text element is **layout-equivalent** to the snapshot. Layout key = the existing
@@ -189,6 +214,27 @@ label differ between a capture and the render). `amcompare unittest` includes th
 group + descendants before/after, `procstat` over the whole tree (incl. system_profiler children) with CSV, `top -l N -s 2 -pid`
 as a cross-check (skip with `--no-top`; top calls host statistics — never during criterion #4 or a memory gate),
 `verdict.txt` (avg CPU < 2 % of one core, max phys_footprint < 150 MB). Run once visible and once occluded (`--out …/occluded`).
+v2: `tools/c7_measure.sh launch [300] [--view memory|cpu|network] [--binary PATH] [--panel-arg ARG]… [--sim "pressure red 92"]`
+starts its own panel (refused while any WokyisPanel runs — `scripts/stop.sh` first) with `--log-dir logs --run-dir run`
+plus the CLI-only `--view` / extra args (nothing is saved), optionally applies `scripts/sim.sh ARGS --for settle+secs+60`,
+measures, then clears the simulation and stops it (SIGTERM; the user's panel is not restarted). `--binary` selects e.g. a
+kept v1 build (`build/WokyisPanel-v1`; v1 has no `--view`). Both modes add, from the panel log whose START has `pid=PID`
+(`tools/c7_health.pl`, `health.tsv`): `health_max5_cpu_pct` (max over HEALTH pairs ≥ 295 s apart in the measured window
+of Δcpu_s / Δt; panel process only; `-` when the window is < 5 min; the baseline is the last HEALTH ≤ 65 s before the
+window, i.e. the end of the warm-up minute), `passes_per_s`, `draw_ms_avg`, `mem_hz`, `sys_dur_us_p99`, `view`. They
+are reported and do not change the verdict.
+
+## c7_ab.sh (criterion #7, spec §11.4)
+`tools/c7_ab.sh [--rounds 3] [--seconds 300] [--settle 60] [--cells C1,…,C5] [--views memory,cpu,network] [--v1 PATH]
+[--out DIR] [--dry-run]` — one `c7_measure.sh launch` per (round, cell, binary, view), v1 next to the v2 memory run and
+the order reversed on even rounds (v1 / v2 alternate). Cells: C1 default, C2 `sim.sh pressure red 92`, C3 `--log-level
+sample` (C1–C3 also on v1, memory view), C4 `--battery no`, C5 `--lang en` (v2 only). Without a v1 binary at `--v1`
+(default `build/WokyisPanel-v1`) the v1 rows are skipped and the summary has no v2 − v1 delta. Output: `results.tsv`,
+one c7_measure directory per run, `summary.md` (per cell / binary / view: mean 5-min average, max 5-min window, pass/s,
+v2 − v1; PASS = every v2 max window < 2.0 %; design target C1 ≤ 1.8 %; the §11.4 decision-ladder step). The default
+matrix is ≈ 6 h; nothing has been measured with it yet. `--summarize DIR` rewrites `summary.md` from `results.tsv`.
+Prerequisites: no panel running, the Wokyis connected, Activity Monitor closed. Exit 0 PASS, 1 FAIL, 2 usage / a run
+could not start.
 
 ## injectdemo.sh (criterion #8)
 `tools/injectdemo.sh [--out DIR] [--airpods] [--only ID] [--plan]` — per source (mem.swap, mem.vm, mem.level, bat.hid,

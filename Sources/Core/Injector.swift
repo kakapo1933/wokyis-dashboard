@@ -8,7 +8,9 @@
 //   900 s in the future is clamped to now+900 (`WARN ctl_expires_clamped`); past expiry → cleared + `CTL expired`.
 //   Unparsable file / version≠1 / unknown or disallowed id / bad pressure → cleared + `CTL invalid reason=…`.
 //   `{}` or a missing file → cleared. Allowed ids: every SourceID raw value plus "mem.mib:<name>" (fail only);
-//   hang: bat.sp only; garbage: bat.sp, bat.iops only.
+//   hang: bat.sp only; garbage: bat.sp, bat.iops, cpu.load, cpu.tasks, net.if (v2, spec §9.2).
+// * v2: the on-screen badge is localized and collapsed by whole items (L10n.badge, from `badgeParts`); `badge` (zh, never
+//   collapsed) stays for CTL / scripts/status.sh.
 // Owner: core.
 import Foundation
 import os
@@ -73,11 +75,16 @@ final class Injector: @unchecked Sendable {
         let key = "mem.mib:" + name
         if snapshot().fail.contains(key) { throw SourceError.injected(key) }
     }
-    /// hang only for bat.sp; garbage only for bat.sp / bat.iops; hang wins over garbage.
+    /// Sources that accept `garbage` (spec §9.2): the battery parsers and the three SystemSampler sources.
+    static let garbageIDs: Set<SourceID> = [.batSP, .batIOPS, .cpuLoad, .cpuTasks, .netIF]
+    /// Sources that accept `hang`.
+    static let hangIDs: Set<SourceID> = [.batSP]
+
+    /// hang only for bat.sp; garbage for `garbageIDs`; hang wins over garbage.
     func mode(_ id: SourceID) -> InjectMode {
         let s = snapshot()
-        if id == .batSP && s.hang.contains(.batSP) { return .hang }
-        if (id == .batSP || id == .batIOPS) && s.garbage.contains(id) { return .garbage }
+        if Injector.hangIDs.contains(id) && s.hang.contains(id) { return .hang }
+        if Injector.garbageIDs.contains(id) && s.garbage.contains(id) { return .garbage }
         return .none
     }
     var pressureOverride: (level: PressureLevel, percent: Int)? {
@@ -87,6 +94,19 @@ final class Injector: @unchecked Sendable {
     var active: Bool { !snapshot().isEmpty }
     /// nil = no injection in effect. Otherwise "模擬中：<名稱>、<名稱> <動作>；…" (spec §7.4).
     var badge: String? { Injector.badge(for: snapshot()) }
+
+    /// The pieces of the on-screen badge (spec §4): each list in SourceID order ("mem.mib:<name>" after the SourceIDs);
+    /// nil = nothing injected. StateBuilder/Store turn it into the localized, collapsed text with L10n.badge.
+    static func badgeParts(_ s: Snapshot) -> BadgeParts? {
+        guard !s.isEmpty else { return nil }
+        let order = SourceID.allCases.map(\.rawValue)
+        func ordered(_ keys: [String]) -> [String] {
+            keys.sorted { (order.firstIndex(of: $0) ?? 99, $0) < (order.firstIndex(of: $1) ?? 99, $1) }
+        }
+        return BadgeParts(fail: ordered(Array(s.fail)), hang: ordered(s.hang.map(\.rawValue)), garbage: ordered(s.garbage.map(\.rawValue)),
+                          pressureLevel: s.pressure?.level, pressurePercent: s.pressure?.percent ?? 0)
+    }
+    var badgeParts: BadgeParts? { Injector.badgeParts(snapshot()) }
 
     static func badge(for s: Snapshot) -> String? {
         guard !s.isEmpty else { return nil }
@@ -222,7 +242,7 @@ final class Injector: @unchecked Sendable {
         if let g = strings("garbage") {
             guard let g else { return (.empty, .invalid("garbage_type")) }
             for id in g {
-                guard let sid = SourceID(rawValue: id), sid == .batSP || sid == .batIOPS else { return (.empty, .invalid("garbage_not_allowed:\(id)")) }
+                guard let sid = SourceID(rawValue: id), Injector.garbageIDs.contains(sid) else { return (.empty, .invalid("garbage_not_allowed:\(id)")) }
                 s.garbage.insert(sid)
             }
         }
@@ -252,6 +272,16 @@ final class Injector: @unchecked Sendable {
         if let d = f.date(from: s) { return d }
         f.formatOptions = [.withInternetDateTime]
         return f.date(from: s)
+    }
+}
+
+/// Source lists + pressure of the active injection (Injector.badgeParts). Localized by `text(_:view:fits:)`.
+struct BadgeParts: Equatable, Sendable {
+    var fail: [String] = [], hang: [String] = [], garbage: [String] = []
+    var pressureLevel: PressureLevel? = nil
+    var pressurePercent = 0
+    func text(_ lang: Lang, view: ViewKind, fits: ((String) -> Bool)?) -> String? {
+        L10n.badge(fail: fail, hang: hang, garbage: garbage, pressure: pressureLevel.map { ($0, pressurePercent) }, lang, view: view, fits: fits)
     }
 }
 
@@ -321,6 +351,31 @@ enum InjectorSelfTest {
         }
         let o5 = inj.apply(nil, now: now)
         out.append(SelfTestCase("injector.missing_file", o5 == .cleared("missing") && !inj.active))
+
+        // v2 (spec §9.2, §10.1 injector.new_ids): fail accepts the three new ids; garbage cpu.load / cpu.tasks / net.if;
+        // hang stays bat.sp only
+        let exp60 = iso(now.addingTimeInterval(60))
+        let oF = inj.apply(j("{\"version\":1,\"expires\":\"\(exp60)\",\"fail\":[\"cpu.load\",\"cpu.tasks\",\"net.if\"]}"), now: now)
+        var thr = 0
+        for id in [SourceID.cpuLoad, .cpuTasks, .netIF] { do { try inj.check(id) } catch { thr += 1 } }
+        let oG = inj.apply(j("{\"version\":1,\"expires\":\"\(exp60)\",\"garbage\":[\"cpu.load\",\"cpu.tasks\",\"net.if\"]}"), now: now)
+        let modesOK = inj.mode(.cpuLoad) == .garbage && inj.mode(.cpuTasks) == .garbage && inj.mode(.netIF) == .garbage && inj.mode(.batSP) == .none
+        let oH = inj.apply(j("{\"version\":1,\"expires\":\"\(exp60)\",\"hang\":[\"cpu.load\"]}"), now: now)
+        let oGH = inj.apply(j("{\"version\":1,\"expires\":\"\(exp60)\",\"garbage\":[\"bat.hid\"]}"), now: now)
+        out.append(SelfTestCase("injector.new_ids", oF == .active(clamped: false) && thr == 3 && oG == .active(clamped: false) && modesOK
+                                && oH == .invalid("hang_not_allowed:cpu.load") && oGH == .invalid("garbage_not_allowed:bat.hid"),
+                                "fail=\(oF) thrown=\(thr) garbage=\(oG) modes=\(modesOK) hang=\(oH)"))
+        // badge parts: SourceID order per list, mem.mib after the ids; localized + view priority via L10n.badge
+        let parts = Injector.badgeParts(Injector.parse(j("""
+        {"version":1,"expires":"\(exp60)","fail":["net.if","mem.mib:vm.x","bat.hid","mem.swap"],"garbage":["cpu.tasks"],"pressure":{"level":4,"percent":92}}
+        """), now: now).0)
+        let zhCPU = parts?.text(.zh, view: .cpu, fits: nil) ?? ""
+        let enNet = parts?.text(.en, view: .network, fits: nil) ?? ""
+        out.append(SelfTestCase("injector.badge_parts", parts?.fail == ["mem.swap", "bat.hid", "net.if", "mem.mib:vm.x"] && parts?.garbage == ["cpu.tasks"]
+                                && parts?.pressureLevel == .critical && parts?.pressurePercent == 92
+                                && zhCPU.hasPrefix("模擬中：HID、交換檔") && zhCPU.contains("執行緒與程序 格式錯誤")
+                                && enNet.hasPrefix("SIM: NET COUNTERS, HID") && enNet.hasSuffix("PRESSURE CRITICAL 92%")
+                                && Injector.badgeParts(.empty) == nil, "\(zhCPU) | \(enNet)"))
         return out
     }
 

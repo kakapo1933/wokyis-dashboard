@@ -4,22 +4,13 @@ import Foundation
 
 enum SourceID: String, CaseIterable, Sendable {
     case memPhysical = "mem.physical", memVM = "mem.vm", memSwap = "mem.swap", memLevel = "mem.level",
-         memPressure = "mem.pressure", memAudit = "mem.audit", batHID = "bat.hid", batIOPS = "bat.iops", batSP = "bat.sp"
+         memPressure = "mem.pressure", memAudit = "mem.audit", batHID = "bat.hid", batIOPS = "bat.iops", batSP = "bat.sp",
+         // v2 (spec §9.2): SystemSampler sources. Appended → v1 ids keep their order (badge / CTL ordering).
+         cpuLoad = "cpu.load", cpuTasks = "cpu.tasks", netIF = "net.if"
 
-    /// Traditional-Chinese name used in the simulation badge (spec §7.4). Latin is upper-cased by the renderer anyway.
-    var badgeName: String {
-        switch self {
-        case .memPhysical: "實體記憶體"
-        case .memVM: "記憶體計數"
-        case .memSwap: "交換檔"
-        case .memLevel: "壓力值"
-        case .memPressure: "壓力等級"
-        case .memAudit: "稽核"
-        case .batHID: "HID"
-        case .batIOPS: "AIRPODS 電量"
-        case .batSP: "藍牙連線"
-        }
-    }
+    /// Traditional-Chinese name used in the v1 simulation badge (`Injector.badge`, CTL / status.sh). Same strings as
+    /// `L10n.sourceName(_, .zh)`, which is the single table (spec §9.2); the on-screen badge uses L10n directly.
+    var badgeName: String { L10n.sourceName(rawValue, .zh) }
 }
 
 enum SourceError: Error, Sendable, Equatable {

@@ -1,9 +1,11 @@
 #!/bin/bash
 # sim.sh — fault / simulation injection through run/control.json (spec §11). Every write goes to a temp file + mv (atomic).
 #   sim.sh fail ID… [--for S]            IDs: mem.physical mem.vm mem.swap mem.level mem.pressure mem.audit bat.hid bat.iops
-#                                              bat.sp, or mem.mib:<sysctl name>
+#                                              bat.sp cpu.load cpu.tasks net.if, or mem.mib:<sysctl name>
 #   sim.sh hang bat.sp [--for S]         system_profiler replaced by /bin/sleep 3600, killed by the real 12 s watchdog
-#   sim.sh garbage bat.sp|bat.iops [--for S]   feed "{not json" / a CFString to the real parser
+#   sim.sh garbage ID [--for S]          bat.sp|bat.iops: "{not json" / a CFString to the real parser; cpu.load: ticks go
+#                                        backwards → dropped, baseline reset; cpu.tasks: threads=0 → implausible → "—";
+#                                        net.if: byte counters go backwards → rate 0 + WARN
 #   sim.sh pressure green|yellow|red [PCT] [--for S]   pressure override (default PCT 30 / 71 / 92)
 #   sim.sh clear                          writes {} (nothing injected)
 #   sim.sh status                         prints control.json and the panel's last CTL line
@@ -14,7 +16,7 @@ set -euo pipefail
 . "$(dirname "$0")/_common.sh"
 CTL="$RUN_DIR/control.json"
 mkdir -p "$RUN_DIR"
-usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 64; }
+usage() { sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 64; }
 [ $# -ge 1 ] || usage
 cmd=$1; shift
 secs=600; args=()
@@ -43,6 +45,7 @@ jlist() { local out="" x; for x in "$@"; do out="$out${out:+,}\"$x\""; done; ech
 valid_id() {
   case "$1" in
     mem.physical|mem.vm|mem.swap|mem.level|mem.pressure|mem.audit|bat.hid|bat.iops|bat.sp) return 0 ;;
+    cpu.load|cpu.tasks|net.if) return 0 ;;
     mem.mib:?*) return 0 ;;
     *) return 1 ;;
   esac
@@ -57,7 +60,8 @@ case "$cmd" in
     [ "${args[*]:-}" = "bat.sp" ] || { echo "sim.sh: hang only supports bat.sp" >&2; exit 64; }
     write "{\"version\":1,\"expires\":\"$expires\",\"hang\":[\"bat.sp\"]}" ;;
   garbage)
-    [ ${#args[@]} -eq 1 ] && { [ "${args[0]}" = bat.sp ] || [ "${args[0]}" = bat.iops ]; } || { echo "sim.sh: garbage takes bat.sp or bat.iops" >&2; exit 64; }
+    [ ${#args[@]} -eq 1 ] && case "${args[0]}" in bat.sp|bat.iops|cpu.load|cpu.tasks|net.if) true ;; *) false ;; esac \
+      || { echo "sim.sh: garbage takes one of bat.sp bat.iops cpu.load cpu.tasks net.if" >&2; exit 64; }
     write "{\"version\":1,\"expires\":\"$expires\",\"garbage\":[\"${args[0]}\"]}" ;;
   pressure)
     [ ${#args[@]} -ge 1 ] || usage

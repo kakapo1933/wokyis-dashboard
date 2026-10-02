@@ -18,6 +18,18 @@
 //     waiting phase and by a one-shot timer when the stable window ends (cancelled by any new screen event; re-checks
 //     the screen signature before acting). WIN event=auto_recover_scheduled stable_s= in_s= (in_s=0.00 when the window
 //     had already elapsed) / auto_recover attempt=n. prevApp is kept across attempts (previousApp rule, as fs_retry).
+//   lock awareness (incident logs/panel-20261002-051634.log: started while the session was locked → 3 fs_failed → manual):
+//     while the session is locked (CGSessionCopyCurrentDictionary CGSSessionScreenIsLocked, public CG, no TCC) no window
+//     is created and toggleFullScreen is never called: tryCreate (start / fs_retry / SIGUSR2 / auto_recover) stays in its
+//     waiting phase with WIN event=waiting_for_unlock (close_reason=locked); a fs failure while locked is not counted
+//     toward the manual lock (closed why=fs_failed cause=locked, no 5 s retry). The unlock (DistributedNotificationCenter
+//     com.apple.screenIsUnlocked; NSWorkspace.screensDidWake and a 1 Hz poll while locked as fallbacks) logs
+//     WIN event=unlocked, counts as a screen event (the stable window restarts) and goes through autoRecoverDecision
+//     (locked → wait; same limit). SIGUSR2 from windowed while locked closes the window (why=locked) instead of
+//     toggling. A request deferred by the lock (start / fs_retry / SIGUSR2 / a fs failure while locked — not an
+//     automatic attempt) is replayed once after the unlock and the stable window (WIN event=unlock_replay request=),
+//     even with --auto-recover no and over the limit, and is not counted as an attempt. Decision helpers
+//     fsFailureOutcome / sessionLocked(_:) / replaysAfterUnlock are pure and selftested.
 //   any ─(SIGINT/SIGTERM/SIGHUP/Cmd+Q)→ exiting: leave full screen (≤ 2 s) → stop sources, reap children → STOP → exit 0
 //   (an AppKit terminate request — Cmd+Q, quit Apple Event, logout / restart / shut down — is answered .terminateLater
 //   and confirmed with reply(toApplicationShouldTerminate: true) once STOP is written, so it never cancels a logout)
@@ -28,6 +40,13 @@
 // re-entry from windowed keeps the focus where the user put it (prevApp is one-shot).
 // Single instance: launch refuses (ERR already_running, exit 1) while run/panel.pid names another live WokyisPanel;
 // exit empties panel.pid only when it still holds this pid.
+// v2 (spec §5, §7, §8): SystemSampler (1 Hz CPU / network, every view), the status item menu and the Carbon hot keys
+// (created after the Store, before tryCreate; independent of the window phase) both go through apply(_:via:), which
+// changes one setting (SettingsModel: stored + that one UserDefaults key; CLI never persisted), de-duplicates the same
+// action arriving from the menu and the hot key within 150 ms (for a menu item counted from when the menu finished
+// closing, since a hot key pressed during menu tracking is delivered only then), updates the Store (full redraw) and the
+// memory sampling rate (memory view visible → --mem-hz, otherwise ≤ 1 Hz). Nothing here activates the app, orders a
+// window front or switches Spaces. Teardown (sampler, hot keys, status item) runs before STOP.
 import AppKit
 
 final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
@@ -51,6 +70,14 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private var sampler: MemorySampler?
     private var battery: BatteryMonitor?
+    // v2
+    let settings: SettingsModel
+    private var sys: SystemSampler?
+    private var statusMenu: StatusMenu?
+    private var hotKeys: HotKeys?
+    private var hotkeysOK: Set<HotKeys.Key> = []
+    private var memHz: Double                 // rate last requested from the MemorySampler (HEALTH mem_hz=)
+    private let badgeMeasurer = PanelRenderer()
     private var signals: Signals?
     private var tick: DispatchSourceTimer?
     private var observers: [NSObjectProtocol] = []
@@ -76,10 +103,15 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var autoRecoverWork: DispatchWorkItem?
     private var autoNote: String?             // last never/limit reason logged in this waiting episode
     private var inShouldTerminate = false     // finishExit ran synchronously inside applicationShouldTerminate
+    // lock awareness (see header)
+    private var lockedKnown = false           // last session lock state read (refreshLock)
+    private var unlockReplay: String?         // a request deferred by the lock (trigger), replayed once after the unlock
+    private var distObservers: [NSObjectProtocol] = []
 
-    init(config: Config, log: EventLog, injector: Injector) {
-        self.config = config; self.log = log; self.injector = injector
+    init(config: Config, log: EventLog, injector: Injector, settings: SettingsModel) {
+        self.config = config; self.log = log; self.injector = injector; self.settings = settings
         self.table = SysctlTable(names: SysctlTable.standardNames, broken: Set(config.breakMIBs))
+        self.memHz = config.memHz
     }
 
     // MARK: launch
@@ -95,6 +127,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         writePID(String(getpid()))
         installMenu()
         store = Store(config: config, startedAt: StartInfo.launchedAt)
+        store.log = log
+        let m = badgeMeasurer
+        store.badgeFits = { text, battery in m.width(m.labelPieces(text, color: Theme.sim)) <= (battery ? Layout.LR : 1252) - Layout.L }
+        store.setUI(settings.effective, lang: settings.resolvedLang, now: Date())
         view.log = log
         view.visibleOnScreen = false
 
@@ -106,6 +142,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         sampler = s; battery = b
         s.start(); b.start()
+        let sy = SystemSampler(injector: injector, log: log) { [weak self] x in self?.onSys(x) }   // onSample on main
+        sys = sy
+        sy.start()
+        installStatusUI()
+        updateMemHz(why: "start")
 
         let sig = Signals(queue: .main) { [weak self] n in self?.onSignal(n) }
         sig.install([SIGINT, SIGTERM, SIGHUP, SIGUSR1, SIGUSR2])
@@ -115,9 +156,69 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         startTick()
         installObservers()
         screenSig = DisplayLocator.signature()
+        lockedKnown = Self.sessionLocked()
         log.event("WIN", "event=auto_recover_config enabled=\(config.autoRecover ? 1 : 0) stable_s=\(StartInfo.fmt(config.autoRecoverStableSeconds)) "
-                  + "limit=\(Self.autoRecoverLimit) window_s=\(Int(Self.autoRecoverWindow))")
+                  + "limit=\(Self.autoRecoverLimit) window_s=\(Int(Self.autoRecoverWindow)) locked=\(lockedKnown ? 1 : 0)")
         tryCreate(reason: "start")
+    }
+
+    // MARK: v2 status item, hot keys, settings (spec §8)
+
+    private func installStatusUI() {
+        let e = settings.effective
+        log.event("UI", "event=view from=- to=\(e.view.token) via=start")
+        log.event("UI", "event=battery from=- to=\(e.batteryVisible ? 1 : 0) via=start")
+        log.event("UI", "event=lang from=- to=\(e.language.rawValue) resolved=\(settings.resolvedLang.rawValue) via=start")
+        if config.hotkeys {
+            let hk = HotKeys { [weak self] k in self?.apply(k.action, via: "hotkey") }
+            hotkeysOK = hk.registerAll(log: log)
+            hotKeys = hk
+        } else {
+            log.event("UI", "event=hotkey_register key=all status=disabled")
+        }
+        let menu = StatusMenu(onAction: { [weak self] a, via in self?.apply(a, via: via) },
+                              onClose: { [weak self] in self?.settings.menuClosed(at: Self.monoNow()) })
+        statusMenu = menu
+        menu.update(e, resolved: settings.resolvedLang, system: settings.systemLang, hotkeysOK: hotkeysOK)
+    }
+
+    /// One UI action (menu item or hot key). Never activates the app, never touches the window / Space.
+    func apply(_ a: UIAction, via: String) {
+        guard phase != .exiting else { return }
+        let before = settings.effective
+        switch settings.apply(a, via: via, at: Self.monoNow()) {
+        case .quit:
+            log.event("UI", "event=quit via=\(via)")
+            NSApp.terminate(nil)          // the applicationShouldTerminate path (STOP, no cancel)
+        case .dedup(let first):
+            log.event("UI", "event=dedup action=\(a.token) via=\(via) first_via=\(first)")
+        case .unchanged:
+            break
+        case .changed(let key, let from, let to):
+            let now = Date()
+            let ev = key == .view ? "view" : (key == .batteryVisible ? "battery" : "lang")
+            let e = settings.effective
+            store.setUI(e, lang: settings.resolvedLang, now: now)
+            syncSimulation(now)
+            if e.view != before.view { updateMemHz(why: "view") }
+            statusMenu?.update(e, resolved: settings.resolvedLang, system: settings.systemLang, hotkeysOK: hotkeysOK)
+            push(now)
+            log.event("UI", "event=\(ev) from=\(from) to=\(to)\(key == .language ? " resolved=\(settings.resolvedLang.rawValue)" : "") via=\(via)")
+        }
+    }
+
+    /// Memory sampling: the memory view on a visible window → --mem-hz; any other view, occluded or no window → ≤ 1 Hz
+    /// (spec §5.4, lever L4).
+    static func memHzTarget(view: ViewKind, visible: Bool, configured: Double) -> Double {
+        view == .memory && visible ? configured : min(1, configured)
+    }
+
+    private func updateMemHz(why: String) {
+        let target = Self.memHzTarget(view: settings.effective.view, visible: window != nil && !occluded, configured: config.memHz)
+        guard target != memHz else { return }
+        log.event("UI", "event=mem_hz from=\(StartInfo.fmt(memHz)) to=\(StartInfo.fmt(target)) why=\(why)")
+        memHz = target
+        sampler?.setHz(target)
     }
 
     private func installMenu() {
@@ -175,10 +276,22 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard let self else { return }
             self.log.event("WIN", "event=wake")
             self.sampler?.sampleNow()
+            self.sys?.sampleNow(reason: "wake")
             self.battery?.pollNow(reason: "wake")
         })
         wsObservers.append(ws.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
             self?.log.event("WIN", "event=sleep")
+        })
+        // lock awareness: the unlock is the trigger, screensDidWake a secondary nudge (the 1 Hz tick polls while locked)
+        wsObservers.append(ws.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.refreshLock(source: "screens_wake")
+        })
+        let dnc = DistributedNotificationCenter.default()
+        distObservers.append(dnc.addObserver(forName: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak self] _ in
+            self?.refreshLock(source: "unlock_notification", hintUnlocked: true)
+        })
+        distObservers.append(dnc.addObserver(forName: NSNotification.Name("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
+            self?.refreshLock(source: "lock_notification")
         })
     }
 
@@ -192,6 +305,14 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         push(now)
     }
 
+    private func onSys(_ x: SysSample) {
+        guard phase != .exiting else { return }
+        let now = Date()
+        store.applySys(x, now: now)
+        syncSimulation(now)
+        push(now)
+    }
+
     private func onGroups(_ g: [DeviceGroup]) {
         guard phase != .exiting else { return }
         let now = Date()
@@ -199,35 +320,40 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         push(now)
     }
 
+    /// Badge parts of the current injection (expiry included); the Store localizes / collapses only on a change.
     private func syncSimulation(_ now: Date) {
         let gen = injector.generation
-        let badge = injector.badge
-        if gen != injectorGeneration || badge != store.badge {
+        let parts = injector.badgeParts
+        if gen != injectorGeneration || parts != store.badgeParts {
             injectorGeneration = gen
-            store.setSimulation(badge: badge, now: now)
+            store.setSimulation(parts: parts, now: now)
         }
     }
 
     private func push(_ now: Date) {
         guard !store.dirty.isEmpty else { return }
-        view.update(store.panelState(now: now), dirty: store.dirty, memSeq: store.latest?.seq)
+        view.update(store.panelState(now: now), dirty: store.dirty, memSeq: store.shownMem?.seq, sysSeq: store.latestSys?.seq)
         store.clearDirty()
     }
 
     private func onTick(_ now: Date) {
         guard phase != .exiting else { return }
         if let w = window { setOcclusion(visible: w.occlusionState.contains(.visible), source: "tick") }   // safety net
+        if lockedKnown && (phase == .waitingForUser || phase == .waitingForDisplay) { refreshLock(source: "poll") }   // missed unlock note
         syncSimulation(now)
         store.tick1Hz(now: now)
         push(now)
-        log.summary(SummaryFormat.body(sample: store.latest, groups: store.groups, sim: injector.active), at: now)
+        log.summary(SummaryFormat.body(sample: store.latest, groups: store.groups, sim: injector.active, sys: store.latestSys,
+                                       view: settings.effective.view), at: now)
         if !EventLog.throttled(now, lastHist, 60.05) {
             lastHist = now
             let p = store.historyPoints
             let span = (p.last?.t ?? 0) - (p.first?.t ?? 0)
             let gaps = zip(p.dropFirst(), p).filter { $0.t - $1.t > 1.5 }.count
+            let sh = store.sysHistoryStats()
             log.line("HIST", "n=\(p.count) span_s=\(Int(span)) coverage_s=\(Int(min(now.timeIntervalSince(store.startedAt), 900))) "
-                     + "gaps=\(gaps) nil_points=\(p.filter { $0.percent == nil }.count) sim_points=\(p.filter(\.simulated).count)")
+                     + "gaps=\(gaps) nil_points=\(p.filter { $0.percent == nil }.count) sim_points=\(p.filter(\.simulated).count) "
+                     + "cpu_n=\(sh.cpu) net_n=\(sh.net) sys_cov_s=\(Int(min(now.timeIntervalSince(store.startedAt), 900)))")
         }
         if !EventLog.throttled(now, lastHealth, 60.05) {
             lastHealth = now
@@ -235,10 +361,14 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
             let st = log.stats()
             let d = view.takeDrawStats()
             let late = sampler?.stats().lateP99Ms.map { String(format: "%.1f", $0) } ?? "-"
+            let ss = sys?.stats()
+            let sysAge = store.lastSysArrival.map { String(format: "%.1f", now.timeIntervalSince($0)) } ?? "-"
             log.line("HEALTH", String(format: "cpu_s=%.3f footprint_mb=%.1f rss_mb=%.1f draws=%llu draw_ms_avg=%@ timer_late_p99_ms=%@ occluded=%d log_mb=%.2f samples=%llu phase=%@",
                                       h?.cpuSeconds ?? -1, h?.footprintMB ?? -1, h?.rssMB ?? -1, d.draws,
                                       d.avgMs.map { String(format: "%.3f", $0) } ?? "-", late, occluded ? 1 : 0,
-                                      Double(st.bytes) / 1_048_576, store.samples, phase.rawValue))
+                                      Double(st.bytes) / 1_048_576, store.samples, phase.rawValue)
+                     + " view=\(settings.effective.view.token) mem_hz=\(StartInfo.fmt(memHz)) passes=\(d.draws) "
+                     + "sys_dur_us_p99=\(ss?.durP99Us.map { String($0) } ?? "-") sys_age_s=\(sysAge) sys_samples=\(ss?.samples ?? 0)")
         }
     }
 
@@ -276,6 +406,15 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// waitingForDisplay / waitingForUser → creating (start or SIGUSR2 only).
     private func tryCreate(reason: String) {
         guard phase == .waitingForDisplay || phase == .waitingForUser else { return }
+        if refreshLock(source: "create") {
+            // locked: no window, no toggleFullScreen (it fails while locked and would count toward the manual lock)
+            lastCloseReason = "locked"   // eligible for the auto-recovery after the unlock
+            autoNote = "locked"          // this line is the episode's waiting_for_unlock line
+            if Self.replaysAfterUnlock(trigger: reason) { unlockReplay = reason }
+            log.event("WIN", "event=waiting_for_unlock trigger=\(reason) stage=create phase=\(phase.rawValue) close_reason=\(lastCloseReason) replay=\(unlockReplay ?? "-")")
+            return
+        }
+        unlockReplay = nil   // this request goes ahead now (it is the replay, or supersedes it)
         guard let k = DisplayLocator.locate(override: config.displayID) else {
             log.event("WIN", "event=display_missing reason=\(reason) override=\(config.displayID.map { String($0) } ?? "-") screens=\(EventLog.q(DisplayLocator.signature()))")
             setPhase(.waitingForDisplay, "no_wokyis")
@@ -283,7 +422,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         wokyis = k
         log.event("WIN", "event=display_found reason=\(reason) \(DisplayLocator.describe(k))")
-        let front = NSWorkspace.shared.frontmostApplication
+        // loginwindow (lock screen just gone) is never an app to hand the focus back to
+        let front = frontmostForFocus()
         prevApp = Self.previousApp(front: front, frontPID: front?.processIdentifier, kept: prevApp)   // fs_retry: panel may be frontmost
         setPhase(.creating, reason)
         createGeneration += 1
@@ -318,11 +458,27 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 self.closeWindow(to: .waitingForDisplay, why: "moved_off_wokyis")
                 return
             }
+            if self.refreshLock(source: "before_fs") {   // locked since the window was created: never toggle while locked
+                if Self.replaysAfterUnlock(trigger: reason) { self.unlockReplay = reason }
+                self.log.event("WIN", "event=waiting_for_unlock trigger=create stage=before_fs phase=\(self.phase.rawValue) close_reason=locked replay=\(self.unlockReplay ?? "-")")
+                self.closeWindow(to: .waitingForUser, why: "locked")
+                self.autoNote = "locked"
+                return
+            }
             self.setPhase(.enteringFS, "toggle")
             self.log.event("WIN", "event=enter_fs \(self.winDetail())")
             w.toggleFullScreen(nil)
         }
     }
+
+    /// The frontmost app as a focus hand-back candidate: loginwindow (lock screen just gone) never is one.
+    private func frontmostForFocus() -> NSRunningApplication? {
+        NSWorkspace.shared.frontmostApplication.flatMap { $0.bundleIdentifier == "com.apple.loginwindow" ? nil : $0 }
+    }
+
+    /// A create request deferred by the lock is replayed once after the unlock (stable window, whatever --auto-recover
+    /// says and outside the 3 per 10 min limit) — except an automatic attempt, which simply re-decides. Pure, selftested.
+    static func replaysAfterUnlock(trigger: String) -> Bool { trigger != "auto_recover" }
 
     /// `cause` (fs_verify_failed only): off_wokyis / size_scale — only off_wokyis is eligible for auto-recovery.
     private func closeWindow(to next: Phase, why: String, cause: String? = nil) {
@@ -338,6 +494,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         occluded = true
         view.visibleOnScreen = false
         setPhase(next, why)
+        updateMemHz(why: "occluded")
     }
 
     func windowDidEnterFullScreen(_ notification: Notification) {
@@ -393,18 +550,36 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func windowDidFailToEnterFullScreen(_ window: NSWindow) {
-        fsFailures += 1
-        log.event("WIN", "event=fs_failed n=\(fsFailures) \(winDetail())")
+        let locked = refreshLock(source: "fs_failed")
+        let o = Self.fsFailureOutcome(locked: locked, failuresBefore: fsFailures)
+        fsFailures = o.failures
+        log.event("WIN", "event=fs_failed n=\(fsFailures) locked=\(locked ? 1 : 0) counted=\(locked ? 0 : 1) \(winDetail())")
         guard phase != .exiting else { finishExitSoon(); return }
-        closeWindow(to: .waitingForUser, why: "fs_failed")
-        if fsFailures < 3 {
+        switch o.action {
+        case .waitForUnlock:
+            // not counted, no 5 s retry: replayed once after the unlock instead (close_reason=fs_failed_locked)
+            unlockReplay = "fs_failed"
+            closeWindow(to: .waitingForUser, why: "fs_failed", cause: "locked")
+        case .retry:
+            closeWindow(to: .waitingForUser, why: "fs_failed")
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
-                guard let self, self.phase == .waitingForUser else { return }
+                guard let self, self.phase == .waitingForUser, self.lastCloseReason == "fs_failed" else { return }
                 self.tryCreate(reason: "fs_retry_\(self.fsFailures)")
             }
-        } else {
+        case .manual:
+            closeWindow(to: .waitingForUser, why: "fs_failed")
             log.event("ERR", "src=window err=fs_failed n=\(fsFailures) action=wait_for_sigusr2")
         }
+    }
+
+    enum FSFailAction: String { case retry, manual, waitForUnlock }
+
+    /// A failed full-screen entry: while the session is locked it is not counted (wait for the unlock); otherwise the
+    /// 1st and 2nd failures retry after 5 s and the 3rd makes the panel manual (SIGUSR2). Pure, selftested.
+    static func fsFailureOutcome(locked: Bool, failuresBefore: Int) -> (failures: Int, action: FSFailAction) {
+        if locked { return (failuresBefore, .waitForUnlock) }
+        let n = failuresBefore + 1
+        return (n, n < 3 ? .retry : .manual)
     }
 
     func windowDidExitFullScreen(_ notification: Notification) {
@@ -433,6 +608,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         occluded = !vis
         view.visibleOnScreen = vis
         log.event("WIN", "event=\(vis ? "visible" : "occluded") occluded=\(vis ? 0 : 1) source=\(source) active_space=\(w.isOnActiveSpace ? 1 : 0)")
+        updateMemHz(why: vis ? "visible" : "occluded")
         if vis {
             store.markAll()
             push(Date())
@@ -496,7 +672,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     static let autoRecoverWindow: TimeInterval = 600
     /// waitingForUser close reasons that come from the window not being on the Wokyis (display change / moved off).
     static let autoRecoverCloseReasons: Set<String> = ["display_changed", "moved_off_wokyis", "created_off_wokyis",
-                                                       "windowed_off_wokyis", "fs_verify_failed_off_wokyis"]
+                                                       "windowed_off_wokyis", "fs_verify_failed_off_wokyis",
+                                                       "locked", "fs_failed_locked"]   // creation deferred / failed while locked
 
     struct AutoRecoverDecision: Equatable {
         enum Action: String { case never, wait, recover, limit }
@@ -506,21 +683,28 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         var schedule: Bool { action == .wait && waitS != nil || action == .recover }
     }
 
-    /// Pure auto-recovery decision. `stableFor` = autoRecoverStableFor (seconds since the last screen event, entering the
-    /// waiting phase and the last automatic attempt); `recentAttempts` / `now` = monotonic seconds (monoNow; any age,
-    /// only those within autoRecoverWindow count).
+    /// Pure auto-recovery decision. `stableFor` = autoRecoverStableFor (seconds since the last screen event — the unlock
+    /// counts as one —, entering the waiting phase and the last automatic attempt); `recentAttempts` / `now` = monotonic
+    /// seconds (monoNow; any age, only those within autoRecoverWindow count). `locked` = the session is locked: an
+    /// otherwise eligible state waits for the unlock (no timer; the unlock re-evaluates). `fsFailures` counts only the
+    /// failures while unlocked (fsFailureOutcome); a failure while locked closes with fs_failed_locked (eligible).
+    /// `replay` = a request deferred by the lock is pending (replaysAfterUnlock): it goes ahead once the session is
+    /// unlocked and stable even with `enabled` false and over the limit (.recover reason "unlock_replay", not counted).
     static func autoRecoverDecision(phase: Phase, lastCloseReason: String, userWindowed: Bool, fsFailures: Int,
                                     wokyisPresent: Bool, stableFor: Double, recentAttempts: [Double], now: Double,
-                                    enabled: Bool, stableSeconds: Double) -> AutoRecoverDecision {
-        guard enabled else { return .init(action: .never, reason: "disabled") }
+                                    enabled: Bool, stableSeconds: Double, locked: Bool = false,
+                                    replay: Bool = false) -> AutoRecoverDecision {
+        guard enabled || replay else { return .init(action: .never, reason: "disabled") }
         guard phase == .waitingForUser || phase == .waitingForDisplay else { return .init(action: .never, reason: "phase_\(phase.rawValue)") }
         if userWindowed { return .init(action: .never, reason: "user_left_fs") }
         if fsFailures >= 3 { return .init(action: .never, reason: "fs_failed_manual") }
         if phase == .waitingForUser && !autoRecoverCloseReasons.contains(lastCloseReason) {
             return .init(action: .never, reason: lastCloseReason == "fs_failed" ? "fs_retry_pending" : "close_\(lastCloseReason)")
         }
+        if locked { return .init(action: .wait, reason: "locked") }
         guard wokyisPresent else { return .init(action: .wait, reason: "no_wokyis") }
         if stableFor < stableSeconds { return .init(action: .wait, reason: "unstable", waitS: stableSeconds - stableFor) }
+        if replay { return .init(action: .recover, reason: "unlock_replay") }
         if attemptsInWindow(recentAttempts, now: now).count >= autoRecoverLimit { return .init(action: .limit, reason: "auto_recover_limit") }
         return .init(action: .recover, reason: "stable")
     }
@@ -539,6 +723,41 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// Monotonic seconds (CLOCK_MONOTONIC on macOS keeps counting while asleep and never steps with the wall clock).
     static func monoNow() -> Double { Double(clock_gettime_nsec_np(CLOCK_MONOTONIC)) / 1e9 }
 
+    // MARK: session lock (public CoreGraphics session dictionary, no TCC)
+
+    /// CGSSessionScreenIsLocked of a session dictionary (absent / false / 0 / no dictionary → unlocked). Pure.
+    static func sessionLocked(_ d: [String: Any]?) -> Bool {
+        guard let v = d?["CGSSessionScreenIsLocked"] else { return false }
+        if let b = v as? Bool { return b }
+        if let n = v as? NSNumber { return n.boolValue }
+        return false
+    }
+    static func sessionLocked() -> Bool { sessionLocked(CGSessionCopyCurrentDictionary() as? [String: Any]) }
+
+    /// Reads the lock state; a change logs WIN event=locked / unlocked and re-evaluates the auto-recovery after the
+    /// current run-loop turn (never re-entrantly). The unlock counts as a screen event: the stable window restarts.
+    /// `hintUnlocked` (the unlock notification): if the dictionary still says locked, re-read once 1 s later.
+    @discardableResult
+    private func refreshLock(source: String, hintUnlocked: Bool = false) -> Bool {
+        let locked = Self.sessionLocked()
+        if locked && hintUnlocked {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.refreshLock(source: "\(source)_recheck") }
+        }
+        guard locked != lockedKnown, phase != .exiting else { return locked }
+        lockedKnown = locked
+        if locked {
+            log.event("WIN", "event=locked source=\(source) phase=\(phase.rawValue)")
+            cancelAutoRecover(reason: "locked")
+        } else {
+            lastScreenEventAt = Self.monoNow()
+            cancelAutoRecover(reason: nil)
+            log.event("WIN", "event=unlocked source=\(source) phase=\(phase.rawValue) close_reason=\(lastCloseReason) fs_failures=\(fsFailures)")
+        }
+        autoNote = nil
+        DispatchQueue.main.async { [weak self] in self?.evaluateAutoRecover(trigger: locked ? "lock" : "unlock") }
+        return locked
+    }
+
     private func cancelAutoRecover(reason: String?) {
         guard let w = autoRecoverWork else { return }
         w.cancel(); autoRecoverWork = nil
@@ -546,6 +765,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func evaluateAutoRecover(trigger: String) {
+        guard phase == .waitingForUser || phase == .waitingForDisplay else { return }   // other phases: never, silent
+        let locked = refreshLock(source: "evaluate")   // first: an unlock seen here restarts the stable window
         let now = Self.monoNow()
         autoAttempts = Self.attemptsInWindow(autoAttempts, now: now)
         let present = DisplayLocator.locate(override: config.displayID) != nil
@@ -554,8 +775,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let d = Self.autoRecoverDecision(phase: phase, lastCloseReason: lastCloseReason, userWindowed: userWindowed,
                                          fsFailures: fsFailures, wokyisPresent: present, stableFor: stableFor,
                                          recentAttempts: autoAttempts, now: now, enabled: config.autoRecover,
-                                         stableSeconds: config.autoRecoverStableSeconds)
-        guard phase == .waitingForUser || phase == .waitingForDisplay else { return }   // other phases: never, silent
+                                         stableSeconds: config.autoRecoverStableSeconds, locked: locked,
+                                         replay: unlockReplay != nil)
         switch d.action {
         case .never:
             if autoNote != d.reason {
@@ -563,10 +784,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 log.event("WIN", "event=auto_recover_off reason=\(d.reason) phase=\(phase.rawValue) close_reason=\(lastCloseReason)")
             }
         case .wait:
-            guard let wait = d.waitS else {   // no Wokyis: the next screen event re-evaluates
+            guard let wait = d.waitS else {   // no Wokyis: the next screen event re-evaluates; locked: the unlock does
                 if autoNote != d.reason {
                     autoNote = d.reason
-                    log.event("WIN", "event=auto_recover_wait reason=\(d.reason) phase=\(phase.rawValue) close_reason=\(lastCloseReason)")
+                    log.event("WIN", d.reason == "locked"
+                              ? "event=waiting_for_unlock trigger=\(trigger) stage=wait phase=\(phase.rawValue) close_reason=\(lastCloseReason)"
+                              : "event=auto_recover_wait reason=\(d.reason) phase=\(phase.rawValue) close_reason=\(lastCloseReason)")
                 }
                 return
             }
@@ -598,6 +821,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 log.event("WIN", "event=auto_recover_scheduled stable_s=\(StartInfo.fmt(config.autoRecoverStableSeconds)) "
                           + "in_s=0.00 phase=\(phase.rawValue) close_reason=\(lastCloseReason) trigger=\(trigger)")
             }
+            if d.reason == "unlock_replay" {   // the deferred request itself: not an automatic attempt (no count, no limit)
+                log.event("WIN", "event=unlock_replay request=\(unlockReplay ?? "-") trigger=\(trigger) phase=\(phase.rawValue) "
+                          + "close_reason=\(lastCloseReason) stable_s=\(String(format: "%.2f", stableFor))")
+                tryCreate(reason: "unlock_replay")
+                return
+            }
             autoAttempts.append(now)
             log.event("WIN", "event=auto_recover attempt=\(autoAttempts.count) trigger=\(trigger) phase=\(phase.rawValue) "
                       + "close_reason=\(lastCloseReason) stable_s=\(String(format: "%.2f", stableFor))")
@@ -623,7 +852,16 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         switch phase {
         case .windowed:
             guard let w = window, windowOnWokyis() else { closeWindow(to: .waitingForUser, why: "windowed_off_wokyis"); tryCreate(reason: "sigusr2"); return }
-            let front = NSWorkspace.shared.frontmostApplication
+            if refreshLock(source: "sigusr2") {
+                // never toggle while locked: close and replay the request once after the unlock (like a create request)
+                unlockReplay = "sigusr2"
+                prevApp = nil   // a new user request (as from the waiting phases): the replay takes the frontmost app
+                log.event("WIN", "event=waiting_for_unlock trigger=sigusr2 stage=windowed phase=\(phase.rawValue) close_reason=locked replay=sigusr2")
+                closeWindow(to: .waitingForUser, why: "locked")
+                autoNote = "locked"
+                return
+            }
+            let front = frontmostForFocus()
             prevApp = Self.previousApp(front: front, frontPID: front?.processIdentifier, kept: prevApp)
             setPhase(.enteringFS, "sigusr2")
             w.toggleFullScreen(nil)
@@ -687,12 +925,16 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if let w = window { w.delegate = nil; w.orderOut(nil); w.close() }
         window = nil
         sampler?.stop()
+        sys?.stop()
+        hotKeys?.unregisterAll()
+        statusMenu?.remove()
         let child = battery?.childPID
         battery?.stop()                   // kills and reaps a running system_profiler
         injector.stop()
         CGDisplayRemoveReconfigurationCallback(displayReconfigured, Unmanaged.passUnretained(self).toOpaque())
         observers.forEach { NotificationCenter.default.removeObserver($0) }
         wsObservers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
+        distObservers.forEach { DistributedNotificationCenter.default().removeObserver($0) }
         releasePID()
         log.event("STOP", "reason=\(stopReason) uptime_s=\(Int(Date().timeIntervalSince(StartInfo.launchedAt))) samples=\(store?.samples ?? 0) "
                   + "draws=\(view.draws) sp_child_at_stop=\(child.map { String($0) } ?? "-")")

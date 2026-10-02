@@ -4,6 +4,13 @@
 # usage: tools/c2measure.sh [--out DIR=evidence/c2] [--tag wokyis] [--pid PID] [--run-dir run] [--tries 3]
 #        tools/c2measure.sh --offline PANEL.png [--out DIR] [--tag T]   # no signal / capture / gate: measure an offscreen render
 #                                                                        # (PANEL.rects.tsv/.perglyph.tsv/.boxes.tsv/.state.json next to it)
+#        tools/c2measure.sh --render VIEW LANG yes|no [--out DIR] [--tag T]   # v2: render the fixture offscreen with
+#                           build/WokyisPanel.app (--snapshot --dump-rects --view VIEW --lang LANG --battery yes|no), then
+#                           measure it like --offline (VIEW memory|cpu|network, LANG zh|en|system)
+# v2: the live and --from-capture gates compare the 7 MEMORY values, so they apply to the memory view only; a snapshot
+# whose state.json says another view is refused (exit 2) — measure CPU / network with --render (or --offline) for now.
+# The panelocr crops are the v1 layout (繁體中文, battery column shown), so a memory snapshot with "lang": "en" or
+# "battery_visible": false is refused too (exit 2, naming the status-menu setting) — measure those with --render.
 #        tools/c2measure.sh --from-capture CAP.png --snapshot PREFIX [--from-capture CAP2.png --snapshot PREFIX2]… [--out DIR]
 #                           [--tag T] [--tries N]   # no signal / capture: gate + measurement on existing files, one try per pair
 #                                                   # (PREFIX = run/snapshot-<ts>; PREFIX.{png,rects.tsv,perglyph.tsv,boxes.tsv,state.json})
@@ -26,19 +33,30 @@
 # Exit: 0 all binding PASS, 1 a binding measurement FAILED, 2 no accepted capture / usage. bash 3.2 compatible.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd); root=$(cd "$here/.." && pwd)
-out="$root/evidence/c2"; tag=wokyis; pid=""; rundir="$root/run"; tries=3; offline=""
+out="$root/evidence/c2"; tag=wokyis; pid=""; rundir="$root/run"; tries=3; offline=""; render=(); render_note=""
 caps=(); snaps=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --out) out=$2; shift 2;; --tag) tag=$2; shift 2;; --pid) pid=$2; shift 2;;
     --run-dir) rundir=$2; shift 2;; --tries) tries=$2; shift 2;; --offline) offline=$2; shift 2;;
     --from-capture) caps+=("$2"); shift 2;; --snapshot) snaps+=("$2"); shift 2;;
+    --render) [ $# -ge 4 ] || { echo "--render needs VIEW LANG yes|no" >&2; exit 2; }; render=("$2" "$3" "$4"); shift 4;;
     -h|--help) awk 'NR > 1 && /^set -euo/ { exit } NR > 1' "$0"; exit 0;;
     *) echo "unknown argument $1" >&2; exit 2;;
   esac
 done
 if [ "${#caps[@]}" -ne "${#snaps[@]}" ]; then echo "--from-capture and --snapshot must come in pairs (${#caps[@]} vs ${#snaps[@]})" >&2; exit 2; fi
 if [ -n "$offline" ] && [ "${#caps[@]}" -gt 0 ]; then echo "--offline and --from-capture exclude each other" >&2; exit 2; fi
+if [ "${#render[@]}" -gt 0 ]; then
+  if [ -n "$offline" ] || [ "${#caps[@]}" -gt 0 ]; then echo "--render excludes --offline / --from-capture" >&2; exit 2; fi
+  app="$root/build/WokyisPanel.app/Contents/MacOS/WokyisPanel"
+  [ -x "$app" ] || { echo "missing $app — run scripts/build.sh" >&2; exit 2; }
+  mkdir -p "$out"
+  offline="$out/$tag-render.png"
+  "$app" --snapshot "$offline" --dump-rects --view "${render[0]}" --lang "${render[1]}" --battery "${render[2]}" > "$out/$tag-render.txt" \
+    || { echo "offscreen render failed (see $out/$tag-render.txt)" >&2; exit 2; }
+  render_note=" Rendered by this run: \`--snapshot --dump-rects --view ${render[0]} --lang ${render[1]} --battery ${render[2]}\`."
+fi
 GH="$here/bin/glyphheight"; AMC="$here/bin/amcompare"
 for b in "$GH" "$AMC"; do [ -x "$b" ] || { echo "missing $b — run tools/build.sh" >&2; exit 2; }; done
 mkdir -p "$out"
@@ -49,6 +67,19 @@ header='try\tt_signal\tsnapshot\tcapture\tcapture_ms\tlayout_match\texact_match\
 # gate_try N T_SIGNAL SNAPBASE CAPTURE CAPTURE_MS — layout-equivalence gate (see header); logs one row; returns 0 on accept
 gate_try() {
   local n=$1 ts=$2 base=$3 cap=$4 ms=$5 ocr="$out/$tag-try$1-ocr.tsv" rc=0 lm em
+  if grep -Eq '"view" *: *"(cpu|network)"' "$base.state.json"; then
+    echo "the snapshot shows the $(grep -Eo '"view" *: *"[a-z]+"' "$base.state.json" | grep -Eo '[a-z]+"$' | tr -d '"') view: the live gate covers the memory view only — use --render VIEW LANG yes|no" >&2
+    exit 2
+  fi
+  # the panelocr crops (PanelRegions.columns, clock / battery crops) are the v1 zh + battery layout (OPS-1)
+  if grep -Eq '"lang" *: *"en"' "$base.state.json"; then
+    echo "the snapshot shows lang=en: the live gate crops the 繁體中文 layout only — set 語言 ▸ 繁體中文 in the status menu (persisted ui.language), or use --render memory en yes|no" >&2
+    exit 2
+  fi
+  if grep -Eq '"battery_visible" *: *false' "$base.state.json"; then
+    echo "the snapshot shows battery_visible=false: the live gate crops the battery-column layout only — turn 顯示藍牙電量 on (⌃⌥⌘B; persisted ui.batteryVisible), or use --render memory LANG no" >&2
+    exit 2
+  fi
   "$AMC" panelocr "$cap" --rects "$base.rects.tsv" --state "$base.state.json" --ref "$base.png" > "$ocr" || rc=$?
   case "$rc" in 0) lm=yes;; 1) lm=NO;; *) lm="error rc=$rc";; esac
   case "$(tail -1 "$ocr")" in *"ALL MATCH"*) em=yes;; *"LAYOUT MATCH"*|*MISMATCH*) em=no;; *) em=-;; esac
@@ -149,7 +180,7 @@ fails=$(awk -F'\t' '$12=="FAIL" || $12=="NO_INK"' "$out/$tag.glyph.tsv" | wc -l 
 # gate description + result for method.md
 capnote=""; gate_md=""
 if [ "$mode" = offline ]; then
-  capnote="OFFLINE MODE: the image is the offscreen render \`$offline\`, not a screen capture."
+  capnote="OFFLINE MODE: the image is the offscreen render \`$offline\`, not a screen capture.$render_note"
   gate_md="- Acceptance gate: not applied (OFFLINE MODE — the measured image is the render the rects were dumped from)."
 else
   if [ "$mode" = from-capture ]; then

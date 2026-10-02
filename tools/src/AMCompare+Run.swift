@@ -153,6 +153,10 @@ final class Harness {
         let lastDsp = pl.dsp.last?.t
         cs.append(Check(name: "panel log at sample level", ok: pl.startLevel == "sample" && lastMem != nil && lastDsp != nil && now - lastMem! < 3 && now - lastDsp! < 5,
                         detail: "\(logPath): log_level=\(pl.startLevel ?? "?") last MEM \(lastMem.map { String(format: "%.1f s ago", now - $0) } ?? "none") last DSP \(lastDsp.map { String(format: "%.1f s ago", now - $0) } ?? "none")"))
+        let lastD = pl.dsp.last
+        cs.append(Check(name: "panel on memory / 繁體中文 / battery shown", ok: lastD?.isOCRLayout ?? false,
+                        detail: lastD.map { "last DSP \($0.layoutTokens)" + ($0.isOCRLayout ? "" : " — the panel OCR crops are the v1 memory / zh / battery layout: "
+                            + "set 記憶體 (⌃⌥⌘M), 語言 ▸ 繁體中文, 顯示藍牙電量 on (⌃⌥⌘B) in the status menu (persisted ui.view / ui.language / ui.batteryVisible)") } ?? "no DSP line"))
         cs.append(Check(name: "panel running ≥ 60 s", ok: pl.startT.map { now - $0 >= 60 } ?? false,
                         detail: pl.startT.map { String(format: "START %.0f s ago", now - $0) } ?? "no START line found"))
         cs.append(Check(name: "panel value rects", ok: rectsTSV != nil && PanelRegions.crops(rectsTSV: rectsTSV).count == 8,

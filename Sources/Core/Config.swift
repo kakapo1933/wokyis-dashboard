@@ -28,6 +28,16 @@ struct Config: Sendable, Equatable {
     var headless = false            // D5
     var duration: Double? = nil     // D5: headless run length (seconds); nil = until SIGINT/SIGTERM
     var args: [String] = []         // raw argv (without argv[0]) for the START line
+    // v2 (spec §7): this run's UI overrides — never written to UserDefaults
+    var view: ViewKind? = nil        // --view memory|cpu|network
+    var battery: Bool? = nil         // --battery yes|no
+    var lang: LanguagePref? = nil    // --lang zh|en|system
+    var hotkeys = true               // --hotkeys yes|no (Carbon ⌃⌥⌘ M/P/N/V/B/L)
+    var memDisplayHz = 2.0           // --mem-display-hz 4|2|1: memory values redrawn at most this often (L3, spec §11.3; default 2
+                                     // since the 2026-10-02 budget run: 4 Hz measured 2.092 % once on memory/en/battery off)
+
+    /// The CLI settings layer (spec §7).
+    var cliLayer: SettingsLayer { SettingsLayer(view: view, batteryVisible: battery, language: lang) }
 
     enum Mode: String, Sendable { case app, headless, selftest, snapshot }
     var mode: Mode {
@@ -63,7 +73,12 @@ struct Config: Sendable, Equatable {
       --summary-seconds N      stdout SUM period and summary-level MEM decimation (default 10)
       --headless [--duration S]  sampling + injector + logging + audit without any window; exits after S s or on SIGINT/SIGTERM
       --selftest               run built-in self tests and exit (0 = pass)
-      --snapshot OUT.png [--dump-rects]  offscreen render once (no window) and exit
+      --snapshot OUT.png [--dump-rects] [--view V] [--lang L] [--battery yes|no]  offscreen render once (no window) and exit
+      --view memory|cpu|network  this run's view (overrides the saved setting; never saved)
+      --battery yes|no         this run's Bluetooth battery column (never saved)
+      --lang zh|en|system      this run's language (never saved; system = first preferred language zh… → zh, else en)
+      --hotkeys yes|no         register the global ⌃⌥⌘ M/P/N/V/B/L hot keys (default yes)
+      --mem-display-hz 4|2|1   memory values redrawn at most this often (default 2); sampling stays --mem-hz
     """
 
     static func parse(_ argv: [String]) throws -> Config {
@@ -125,6 +140,30 @@ struct Config: Sendable, Equatable {
             case "--selftest": c.selftest = true
             case "--snapshot": c.snapshotOut = try value(a)
             case "--dump-rects": c.dumpRects = true
+            case "--view":
+                let v = try value(a)
+                guard let k = ViewKind(rawValue: v) else { throw ParseError(description: "--view \(v): expected memory|cpu|network") }
+                c.view = k
+            case "--battery":
+                switch try value(a) {
+                case "yes": c.battery = true
+                case "no": c.battery = false
+                case let s: throw ParseError(description: "--battery \(s): expected yes|no")
+                }
+            case "--lang":
+                let v = try value(a)
+                guard let l = LanguagePref(rawValue: v) else { throw ParseError(description: "--lang \(v): expected zh|en|system") }
+                c.lang = l
+            case "--hotkeys":
+                switch try value(a) {
+                case "yes": c.hotkeys = true
+                case "no": c.hotkeys = false
+                case let s: throw ParseError(description: "--hotkeys \(s): expected yes|no")
+                }
+            case "--mem-display-hz":
+                let v = try value(a)
+                guard let d = Double(v), [1.0, 2.0, 4.0].contains(d) else { throw ParseError(description: "--mem-display-hz \(v): expected 4|2|1") }
+                c.memDisplayHz = d
             case "-h", "--help": throw ParseError(description: "help")
             default:
                 // LaunchServices may pass -psn_… when started via `open`; ignore it.
@@ -207,6 +246,26 @@ enum ConfigSelfTest {
         reject("missing", ["--log-dir"])
         reject("duration-no-headless", ["--duration", "5"])
         reject("dumprects-alone", ["--dump-rects"])
+        // v2 (spec §7, §10.1)
+        expect("v2_defaults", []) { c in c.view == nil && c.battery == nil && c.lang == nil && c.hotkeys && c.memDisplayHz == 2 && c.cliLayer == SettingsLayer() }
+        expect("view", ["--view", "cpu"]) { $0.view == .cpu && $0.cliLayer.view == .cpu }
+        expect("view_network", ["--view", "network"]) { $0.view == .network }
+        expect("lang", ["--lang", "en"]) { $0.lang == .en && $0.cliLayer.language == .en }
+        expect("lang_system", ["--lang", "system"]) { $0.lang == .system }
+        expect("battery", ["--battery", "no"]) { $0.battery == false && $0.cliLayer.batteryVisible == false }
+        expect("hotkeys", ["--hotkeys", "no"]) { !$0.hotkeys }
+        expect("mem_display_hz", ["--mem-display-hz", "4"]) { $0.memDisplayHz == 4 }
+        expect("snapshot_view", ["--snapshot", "/tmp/x.png", "--view", "network", "--lang", "en", "--battery", "no"]) {
+            $0.mode == .snapshot && $0.view == .network && $0.lang == .en && $0.battery == false
+        }
+        reject("view", ["--view", "gpu"])
+        reject("view_missing", ["--view"])
+        reject("lang", ["--lang", "fr"])
+        reject("lang_missing", ["--lang"])
+        reject("battery", ["--battery", "maybe"])
+        reject("battery_missing", ["--battery"])
+        reject("hotkeys", ["--hotkeys", "1"])
+        reject("mem_display_hz", ["--mem-display-hz", "3"])
         return out
     }
 }

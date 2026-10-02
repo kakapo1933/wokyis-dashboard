@@ -1,7 +1,8 @@
 #!/bin/bash
 # tools/build.sh — build the evidence tools into tools/bin/ (Apple frameworks only; bash 3.2 compatible).
 #   core tools (always):  glyphheight fontcal ocr procstat composite   ← src/Common.swift + src/<Tool>.swift
-#                         mockup                                       ← Sources/Render/{PanelModel,PanelRenderer}.swift + src/Mockup.swift
+#                         mockup                                       ← Sources/Render/{PanelModel,PanelRenderer,PanelRenderer+Views,L10n}.swift
+#                                                                        + src/Mockup.swift
 #   optional tools:       amcompare edgecheck winlist logstats         ← built when src/<Tool>.swift exists:
 #                         src/Common.swift + src/<Tool>.swift + every src/<Tool>+*.swift (extra files owned by that tool)
 #   afterwards: chmod +x the tool scripts and run the quick tool self-tests (tools/selftest.sh; TOOLS_SELFTEST=0 skips them)
@@ -18,7 +19,8 @@ for t in glyphheight:GlyphHeight fontcal:FontCal ocr:OCR procstat:ProcStat compo
   bin=${t%%:*}; src=${t##*:}
   build "$bin" src/Common.swift "src/$src.swift"
 done
-build mockup ../Sources/Render/PanelModel.swift ../Sources/Render/PanelRenderer.swift src/Mockup.swift
+build mockup ../Sources/Render/PanelModel.swift ../Sources/Render/PanelRenderer.swift ../Sources/Render/PanelRenderer+Views.swift \
+  ../Sources/Render/L10n.swift src/Mockup.swift
 for t in amcompare:AMCompare edgecheck:EdgeCheck winlist:WinList logstats:LogStats; do
   bin=${t%%:*}; src=${t##*:}
   if [ -f "src/$src.swift" ]; then

@@ -40,9 +40,14 @@ case .app:
     log.simActive = { injector.active }
     let quick = SelfTest.runQuick()
     let table = SysctlTable(names: SysctlTable.standardNames, broken: Set(config.breakMIBs))
+    // v2 settings (spec §7): defaults < UserDefaults < this run's CLI; only the app mode reads / writes UserDefaults
+    let settingsStore = DefaultsSettingsStore()
+    let (stored, settingsWarnings) = settingsStore.load()
+    let settings = SettingsModel(stored: stored, cli: config.cliLayer, store: settingsStore)
     log.event("START", StartInfo.startBody(config: config, mode: .app, selftest: quick.ok ? "ok" : "fail:" + quick.failed.joined(separator: ","),
-                                           mibs: "\(table.resolvedCount)/\(table.names.count)")
+                                           mibs: "\(table.resolvedCount)/\(table.names.count)", ui: settings)
               + " log=\(EventLog.q(log.currentFile.path))")
+    for w in settingsWarnings { log.event("WARN", "settings_invalid \(w) domain=\(DefaultsSettingsStore.domain)") }
     injector.start()
     let app = NSApplication.shared
     app.setActivationPolicy(.regular)
@@ -54,7 +59,7 @@ case .app:
     let activity = ProcessInfo.processInfo.beginActivity(options: activityOptions,
                                                          reason: "Wokyis panel: continuous memory / battery sampling")
     log.line("HEALTH", "activity_options=0x\(String(activityOptions.rawValue, radix: 16)) latency_critical=\(activityOptions.contains(.latencyCritical) ? 1 : 0)")
-    let controller = AppController(config: config, log: log, injector: injector)
+    let controller = AppController(config: config, log: log, injector: injector, settings: settings)
     app.delegate = controller
     withExtendedLifetime((controller, activity)) { app.run() }
     log.flushSync()

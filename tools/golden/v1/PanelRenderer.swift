@@ -37,10 +37,6 @@ enum Theme {
     static let barNormal = c(0x7D8894)
     static let attention = c(0xF2F4F7)   // inverted chips: low battery "低", stall "停滯" (never a pressure hue)
     static let sim       = c(0xFF2FB9)   // simulation / injection marker only
-    // v2 series colours (AM: NSColor.systemRed / systemCyan, darkAqua, sRGB on macOS 27). Used ONLY as series identity in
-    // the CPU / network views (legend swatch + graph): system & upload = red, user & download = cyan.
-    static let seriesRed  = c(0xFF4245)
-    static let seriesCyan = c(0x3CD3FE)
     static func pressureFill(_ l: PressureLevel) -> (r: CGFloat, g: CGFloat, b: CGFloat) {   // AM fill hues
         switch l { case .normal: (0, 0.8, 0); case .warning: (0.941, 0.745, 0.141); case .critical: (1, 0, 0) }
     }
@@ -89,18 +85,6 @@ enum Size {
 
 enum Region: String, CaseIterable {
     case chrome, used, pressure, graph, axis, sec0, sec1, sec2, sec3, sec4, sec5, battery, clock, sim
-    // v2 (appended: the memory draw order above is unchanged)
-    case cpuSys, cpuUser, cpuIdle, cpuThreads, cpuProcs
-    case netDown, netUp, netPktIn, netPktOut, netPktInS, netPktOutS, netRecv, netSent
-    /// nil = shared by every view (chrome, graph, axis, battery, clock, sim)
-    var view: ViewKind? {
-        switch self {
-        case .chrome, .graph, .axis, .battery, .clock, .sim: nil
-        case .used, .pressure, .sec0, .sec1, .sec2, .sec3, .sec4, .sec5: .memory
-        case .cpuSys, .cpuUser, .cpuIdle, .cpuThreads, .cpuProcs: .cpu
-        default: .network
-        }
-    }
 }
 
 enum Layout {
@@ -137,114 +121,13 @@ enum Layout {
     ]
 }
 
-// MARK: - v2 geometry: one table per (view, battery column visible, language)
-
-/// A text cell: label at `labelBase`, value at `valueBase`, both left-aligned at `x`; `room` = widest value that keeps
-/// ≥ 30 px to the next column (auto-fit target). `row` 0 = hero row, 1…2 = grid rows; `col` = column index in that row.
-struct Cell { let x: CGFloat; let labelBase: CGFloat; let valueBase: CGFloat; let room: CGFloat; let hero: Bool; let row: Int; let col: Int }
-
-struct Geometry {
-    let view: ViewKind, battery: Bool, lang: Lang
-    var LR: CGFloat                    // right edge of the main column: 828 with the battery column, 1252 without
-    var graph: CGRect
-    var axisBase: CGFloat
-    var pill: CGRect = .null           // memory only
-    var cells: [Region: Cell] = [:]    // .clock present only when the clock is a grid cell (battery column hidden)
-    var regions: [Region: CGRect] = [:]
-    var compact: Bool { battery }      // 800 px main column → compact label forms (L10n)
-}
-
-extension Layout {
-    nonisolated(unsafe) private static var geoCache: [String: Geometry] = [:]   // main thread only
-    static func regions(view: ViewKind, battery: Bool, lang: Lang) -> [Region: CGRect] { geometry(view, battery: battery, lang: lang).regions }
-
-    static func geometry(_ v: ViewKind, battery: Bool, lang: Lang) -> Geometry {
-        let key = "\(v.rawValue)|\(battery)|\(lang.rawValue)"
-        if let g = geoCache[key] { return g }
-        let g = makeGeometry(v, battery: battery, lang: lang)
-        geoCache[key] = g
-        return g
-    }
-
-    private static func makeGeometry(_ v: ViewKind, battery: Bool, lang: Lang) -> Geometry {
-        let LR: CGFloat = battery ? 828 : 1252
-        var g = Geometry(view: v, battery: battery, lang: lang, LR: LR, graph: CGRect(x: 28, y: 176, width: LR - 28, height: 180), axisBase: 400)
-        var heroX: [CGFloat] = [], heroRegions: [Region] = []
-        var gridX: [CGFloat] = [], gridRows: [[Region?]] = []     // nil = empty cell; .clock = clock cell
-        var labelBase: [CGFloat] = [456, 586], valueBase: [CGFloat] = [516, 642]
-        var rowY: [(CGFloat, CGFloat)] = [(412, 528), (538, 654)]
-        switch v {
-        case .memory:
-            heroX = battery ? (lang == .zh ? [28, 440] : [28, 380]) : [28, 640]
-            heroRegions = [.used, .pressure]
-            let pw: CGFloat = lang == .zh ? 112 : 228
-            g.pill = CGRect(x: LR - pw, y: 93, width: pw, height: 54)
-            gridX = battery ? (lang == .zh ? [28, 294, 592] : [28, 301, 584]) : [28, 423, 759, 1056]
-            gridRows = battery ? [[.sec0, .sec1, .sec2], [.sec3, .sec4, .sec5]] : [[.sec0, .sec1, .sec2, nil], [.sec3, .sec4, .sec5, .clock]]
-        case .cpu:
-            g.graph = CGRect(x: 28, y: 176, width: LR - 28, height: 300)
-            g.axisBase = 520
-            labelBase = [586]; valueBase = [642]; rowY = [(538, 654)]
-            if battery {
-                heroX = [28, 440]; heroRegions = [.cpuSys, .cpuUser]
-                gridX = [28, 294, 592]; gridRows = [[.cpuIdle, .cpuThreads, .cpuProcs]]
-            } else {
-                heroX = [28, 444, 860]; heroRegions = [.cpuSys, .cpuUser, .cpuIdle]
-                gridX = [28, 444, 860]; gridRows = [[.cpuThreads, .cpuProcs, .clock]]
-            }
-        case .network:
-            // row 2 sits 4 px lower and its value 12 px lower than the memory grid: the "/" of 流出/秒 / OUT/SEC descends
-            // ~9 px below its baseline and must clear the digits below (measure rects ±5 px must not touch)
-            labelBase = [456, 590]; valueBase = [516, 654]; rowY = [(412, 528), (538, 668)]
-            heroX = battery ? [28, 440] : [28, 640]
-            heroRegions = [.netDown, .netUp]
-            gridX = battery ? [28, 380, 600] : [28, 396, 750, 1056]
-            gridRows = battery ? [[.netPktIn, .netPktInS, .netRecv], [.netPktOut, .netPktOutS, .netSent]]
-                               : [[.netPktIn, .netPktInS, .netRecv, nil], [.netPktOut, .netPktOutS, .netSent, .clock]]
-        }
-        // hero cells + regions
-        for (i, r) in heroRegions.enumerated() {
-            let next = i + 1 < heroX.count ? heroX[i + 1] : nil
-            var room = (next.map { $0 - 30 } ?? LR) - heroX[i]
-            if v == .memory && i == 0 { room = heroX[1] - 28 - 24 }    // original memory rule (Memory Used auto-fit)
-            g.cells[r] = Cell(x: heroX[i], labelBase: Layout.heroLabelBase, valueBase: Layout.heroBase, room: room, hero: true, row: 0, col: i)
-            g.regions[r] = CGRect(x: i == 0 ? 20 : heroX[i] - 10, y: 12, width: (next.map { $0 - 16 } ?? LR + 8) - (i == 0 ? 20 : heroX[i] - 10), height: 154)
-        }
-        for (ri, row) in gridRows.enumerated() {
-            for (ci, r) in row.enumerated() {
-                guard let r else { continue }
-                let next = ci + 1 < gridX.count ? gridX[ci + 1] : nil
-                g.cells[r] = Cell(x: gridX[ci], labelBase: labelBase[ri], valueBase: valueBase[ri], room: (next.map { $0 - 30 } ?? LR) - gridX[ci],
-                                  hero: false, row: ri + 1, col: ci)
-                let x0: CGFloat = ci == 0 ? 20 : gridX[ci] - 6
-                let x1: CGFloat = next.map { $0 - 6 } ?? LR + 12
-                g.regions[r] = CGRect(x: x0, y: rowY[ri].0, width: x1 - x0, height: rowY[ri].1 - rowY[ri].0)
-            }
-        }
-        let wide = LR - Layout.L + 16
-        g.regions[.graph] = CGRect(x: 20, y: g.graph.minY - 6, width: wide, height: g.graph.height + 12)
-        g.regions[.axis] = CGRect(x: 20, y: g.graph.maxY + 6, width: wide, height: g.axisBase + 10 - (g.graph.maxY + 6))
-        let simTop = max(660, rowY.last!.1)
-        g.regions[.sim] = CGRect(x: 20, y: simTop, width: wide, height: 712 - simTop)
-        if battery {
-            g.regions[.battery] = Layout.region[.battery]!
-            g.regions[.clock] = Layout.region[.clock]!
-        }
-        if v == .memory && battery && lang == .zh { g.regions = Layout.region }   // the frozen v1 table, verbatim
-        return g
-    }
-}
-
 // MARK: - measurement records
 
 struct MeasureSpec {
     var label: String
     var rect: CGRect      // integer image px, top-left origin
     var minPx: Int        // 0 = informational
-    var cls: String       // digit | cjk | latin-cap | unit | glyph-cjk | glyph-cap | glyph-digit
-    /// v2: vector ink height (glyph path bounds) the in-process guard checks against minPx. For digit pieces it is the
-    /// SMALLEST single-digit height in the piece (1 / 4 / 7 are the flattest), so a 1 px loss is caught.
-    var inkH: CGFloat = 0
+    var cls: String       // digit | cjk | latin-cap | unit | glyph-cjk | glyph-cap
 }
 
 struct Piece {
@@ -264,15 +147,6 @@ final class PanelRenderer {
     private(set) var boxes: [(id: String, r: CGRect)] = []
     private(set) var labelTexts: [(id: String, text: String)] = []   // rendered label strings (lowercase audit)
     var graphSpan: Double = 600                                          // criterion 3: ≥ 10 min
-    /// v2 (CPU budget): false in the live PanelView — no measurement records (specs, per-glyph / per-digit rects, label
-    /// audit) are built on the 4 Hz path; Snapshot, selftest, mockup, golden and the SIGUSR1 dump render with true.
-    /// Never changes a pixel (golden + mockup bench verify).
-    var measure = true
-    // v2: geometry / language of the frame being drawn, and the cell registry used by layoutProblems()
-    private(set) var geo = Layout.geometry(.memory, battery: true, lang: .zh)
-    var lang: Lang { geo.lang }
-    /// one entry per drawn cell: row (0 hero, 1…2 grid; 9 = battery-column clock row), col, label box ids, value box id
-    private(set) var cellLog: [(row: Int, col: Int, labels: [String], value: String)] = []
 
     // MARK: text primitive
 
@@ -297,51 +171,26 @@ final class PanelRenderer {
             CTLineDraw(lines[i], ctx)
             let ink = inkRect(lines[i], cx, baseline)
             if !ink.isNull { union = union.union(ink) }
-            if measure && p.isLabel { labelTexts.append((id, p.text)) }
-            // v2: a piece without letters / digits (the "…" a truncated badge ends with) is punctuation, not a glyph class
-            if measure && p.cls != "symbol" && !ink.isNull && p.text.contains(where: { $0.isLetter || $0.isNumber }) {
-                var mr = ink.insetBy(dx: -5, dy: -5).integral
+            if p.isLabel { labelTexts.append((id, p.text)) }
+            if p.cls != "symbol" && !ink.isNull {
+                var mr = ink
                 var what = p.text
-                var inkH = ink.height
-                if p.cls == "digit", let seg = digitSegment(p.text) {
-                    // v2: the binding rect covers only the longest pure digit run with NO horizontal padding, so neither a
-                    // thousands comma nor a decimal point (commas descend below the baseline) is inside it; the
-                    // in-process guard uses the smallest single-digit ink height of the whole piece.
+                if p.cls == "digit", let seg = digitSegment(p.text), seg.count < p.text.count {
+                    // measure only a pure digit run: commas descend below the baseline and would inflate the height
                     let r = rangeOf(seg, in: p.text)
                     let off = CTLineGetOffsetForStringIndex(lines[i], r.location, nil)
                     let sub = CTLineCreateWithAttributedString(NSAttributedString(string: seg, attributes:
                         [NSAttributedString.Key(kCTFontAttributeName as String): p.font]))
-                    let sr = inkRect(sub, cx + off, baseline)
-                    mr = CGRect(x: sr.minX.rounded(.up), y: (sr.minY - 5).rounded(.down), width: 0, height: 0)
-                    mr.size = CGSize(width: sr.maxX.rounded(.down) - mr.minX, height: (sr.maxY + 5).rounded(.up) - mr.minY)
+                    mr = inkRect(sub, cx + off, baseline)
                     what = seg
-                    let ns = p.text as NSString
-                    var minH = CGFloat.greatestFiniteMagnitude
-                    for k in 0..<ns.length {
-                        let ch = ns.substring(with: NSRange(location: k, length: 1))
-                        guard ch.first!.isNumber else { continue }
-                        let one = CTLineCreateWithAttributedString(NSAttributedString(string: ch, attributes:
-                            [NSAttributedString.Key(kCTFontAttributeName as String): p.font]))
-                        let x0 = cx + CTLineGetOffsetForStringIndex(lines[i], k, nil)
-                        let gr = inkRect(one, x0, baseline)
-                        if gr.isNull { continue }
-                        minH = min(minH, gr.height)
-                        if p.minPx > 0 {   // informational per-digit rects (advance box of that digit only, no separators)
-                            let x1 = cx + CTLineGetOffsetForStringIndex(lines[i], k + 1, nil)
-                            let rr = CGRect(x: x0.rounded(.up), y: (gr.minY - 5).rounded(.down), width: x1.rounded(.down) - x0.rounded(.up),
-                                            height: (gr.maxY + 5).rounded(.up) - (gr.minY - 5).rounded(.down))
-                            specs.append(MeasureSpec(label: "glyph:\(id)[\(ch)]", rect: rr, minPx: 0, cls: "glyph-digit"))
-                        }
-                    }
-                    if minH < .greatestFiniteMagnitude { inkH = minH }
                 }
-                specs.append(MeasureSpec(label: "\(id)[\(what)]", rect: mr, minPx: p.minPx, cls: p.cls, inkH: inkH))
+                specs.append(MeasureSpec(label: "\(id)[\(what)]", rect: mr.insetBy(dx: -5, dy: -5).integral, minPx: p.minPx, cls: p.cls))
                 if p.isLabel && (p.cls == "cjk" || p.cls == "latin-cap") {
                     // informational per-glyph rects (x = the glyph's own advance box, no x padding)
                     let ns = p.text as NSString
                     for k in 0..<ns.length {
                         let ch = ns.substring(with: NSRange(location: k, length: 1))
-                        if !ch.contains(where: { $0.isLetter || $0.isNumber }) { continue }   // punctuation / space is not a glyph class
+                        if ch == " " || "、：，。…·（）".contains(ch) { continue }   // punctuation is not a glyph class
                         let x0 = cx + CTLineGetOffsetForStringIndex(lines[i], k, nil)
                         let x1 = cx + CTLineGetOffsetForStringIndex(lines[i], k + 1, nil)
                         let r = CGRect(x: x0, y: ink.minY - 5, width: x1 - x0, height: ink.height + 10).integral
@@ -364,10 +213,9 @@ final class PanelRenderer {
         if b.isNull || b.isEmpty { return .null }
         return CGRect(x: x + b.minX, y: baseline - b.maxY, width: b.width, height: b.height)
     }
-    /// Longest run of digits only (v2: "." and "," end a run — they must not sit inside a binding measurement rect).
     private func digitSegment(_ s: String) -> String? {
         var best = "", cur = ""
-        for ch in s { if ch.isNumber { cur.append(ch) } else { if cur.count > best.count { best = cur }; cur = "" } }
+        for ch in s { if ch.isNumber || ch == "." { cur.append(ch) } else { if cur.count > best.count { best = cur }; cur = "" } }
         if cur.count > best.count { best = cur }
         return best.isEmpty ? nil : best
     }
@@ -378,7 +226,7 @@ final class PanelRenderer {
             let r = ns.range(of: seg, options: [], range: search)
             if r.location == NSNotFound { return CFRange(location: 0, length: 0) }
             let before = r.location == 0 ? " " : ns.substring(with: NSRange(location: r.location - 1, length: 1))
-            if !before.first!.isNumber { return CFRange(location: r.location, length: r.length) }
+            if !(before.first!.isNumber || before == ".") { return CFRange(location: r.location, length: r.length) }
             search = NSRange(location: r.location + 1, length: ns.length - r.location - 1)
         }
     }
@@ -423,14 +271,7 @@ final class PanelRenderer {
         }
         var out = [Piece(text: p.number, font: Fonts.num(size), color: Theme.value, cls: "digit", minPx: minPx)]
         if !p.unit.isEmpty {
-            // v2: a CJK unit suffix ("Mb/秒") is drawn in PingFang right after the Latin part (CoreText's fallback for 秒
-            // inside SF Condensed leaves a visible gap); units without CJK are unchanged.
-            if let i = p.unit.firstIndex(where: { ch in ch.unicodeScalars.contains { (0x2E80...0x9FFF).contains($0.value) } }) {
-                out.append(Piece(text: String(p.unit[..<i]), font: Fonts.num(Size.unit, .medium), color: Theme.unit, cls: "unit", minPx: 0, gapBefore: (size * 0.12).rounded()))
-                out.append(Piece(text: String(p.unit[i...]), font: Fonts.cjk(Size.cjk), color: Theme.unit, cls: "unit", minPx: 0, gapBefore: 1))
-            } else {
-                out.append(Piece(text: p.unit, font: Fonts.num(Size.unit, .medium), color: Theme.unit, cls: "unit", minPx: 0, gapBefore: (size * 0.12).rounded()))
-            }
+            out.append(Piece(text: p.unit, font: Fonts.num(Size.unit, .medium), color: Theme.unit, cls: "unit", minPx: 0, gapBefore: (size * 0.12).rounded()))
         }
         return out
     }
@@ -438,18 +279,14 @@ final class PanelRenderer {
     // MARK: frame
 
     /// Full frame when `only == nil`; otherwise repaint just those regions (bg-filled + clipped), as NSView.draw(dirtyRect) would.
-    /// Regions not in the active view's table (e.g. memory regions on the CPU view, `.battery` when hidden) are ignored.
     func draw(_ ctx: CGContext, _ s: PanelState, only: Set<Region>? = nil) {
-        specs = []; boxes = []; labelTexts = []; cellLog = []
-        geo = Layout.geometry(s.view, battery: s.batteryVisible, lang: s.lang)
+        specs = []; boxes = []; labelTexts = []
         ctx.setShouldAntialias(true)
         ctx.setAllowsFontSmoothing(true)
-        let table = geo.regions
-        let regions = only ?? Set(table.keys).union([.chrome])
+        let regions = only ?? Set(Region.allCases)
         if only == nil || regions.contains(.chrome) { drawChrome(ctx) }
         for r in Region.allCases where r != .chrome && regions.contains(r) {
-            guard let rr = table[r] else { continue }
-            if only != nil {
+            if only != nil, let rr = Layout.region[r] {
                 ctx.saveGState(); ctx.clip(to: rr); ctx.setFillColor(Theme.bg); ctx.fill(rr)
                 drawRegion(ctx, r, s)
                 ctx.restoreGState()
@@ -463,16 +300,13 @@ final class PanelRenderer {
         case .chrome: drawChrome(ctx)
         case .used: drawUsed(ctx, s)
         case .pressure: drawPressure(ctx, s)
-        case .graph:
-            switch s.view { case .memory: drawGraph(ctx, s); case .cpu: drawCPUGraph(ctx, s); case .network: drawNetGraph(ctx, s) }
+        case .graph: drawGraph(ctx, s)
         case .axis: drawAxis(ctx, s)
         case .sec0, .sec1, .sec2, .sec3, .sec4, .sec5:
             drawSecondary(ctx, s, Int(String(r.rawValue.last!))!)
         case .battery: drawBatteries(ctx, s)
         case .clock: drawClock(ctx, s)
         case .sim: if let b = s.simulationBadge { drawBadge(ctx, b) }
-        case .cpuSys, .cpuUser, .cpuIdle, .cpuThreads, .cpuProcs: drawCPUCell(ctx, s, r)
-        case .netDown, .netUp, .netPktIn, .netPktOut, .netPktInS, .netPktOutS, .netRecv, .netSent: drawNetCell(ctx, s, r)
         }
     }
 
@@ -482,48 +316,38 @@ final class PanelRenderer {
         ctx.setFillColor(Theme.edge)   // 1 px ring on the outermost pixels
         ctx.fill(CGRect(x: 0, y: 0, width: Layout.W, height: 1)); ctx.fill(CGRect(x: 0, y: Layout.H - 1, width: Layout.W, height: 1))
         ctx.fill(CGRect(x: 0, y: 0, width: 1, height: Layout.H)); ctx.fill(CGRect(x: Layout.W - 1, y: 0, width: 1, height: Layout.H))
-        if geo.battery { ctx.setFillColor(Theme.divider); ctx.fill(Layout.divider) }
+        ctx.setFillColor(Theme.divider); ctx.fill(Layout.divider)
     }
 
-    func logCell(_ c: Cell, _ labels: [String], _ value: String) { cellLog.append((c.row, c.col, labels, value)) }
-    /// extension files add element boxes through this (the arrays stay private(set))
-    func addBox(_ id: String, _ r: CGRect) { boxes.append((id, r)) }
-
-    /// label text of a key in the frame's language (compact form in the 800 px main column)
-    func T(_ k: L10n.Key) -> String { L10n.t(k, lang, compact: geo.compact) }
-
     func drawUsed(_ ctx: CGContext, _ s: PanelState) {
-        let c = geo.cells[.used]!
-        let l = text(ctx, labelPieces(T(.memUsed)), x: c.x, baseline: c.labelBase, id: "label.used")
+        text(ctx, labelPieces("記憶體用量"), x: Layout.L, baseline: Layout.heroLabelBase, id: "label.used")
         var size = Size.hero
-        while size > Size.heroMin && width(valuePieces(s.memory.used, size: size, minPx: 64)) > c.room { size -= 2 }
-        text(ctx, valuePieces(s.memory.used, size: size, minPx: 64), x: c.x, baseline: c.valueBase, id: "value.used")
-        _ = l; cellLog.append((0, 0, ["label.used"], "value.used"))
+        while size > Size.heroMin && width(valuePieces(s.memory.used, size: size, minPx: 64)) > Layout.pressureX - Layout.L - 24 { size -= 2 }
+        text(ctx, valuePieces(s.memory.used, size: size, minPx: 64), x: Layout.L, baseline: Layout.heroBase, id: "value.used")
     }
 
     func drawPressure(_ ctx: CGContext, _ s: PanelState) {
-        let m = s.memory, c = geo.cells[.pressure]!
-        text(ctx, labelPieces(T(.memPressure)), x: c.x, baseline: c.labelBase, id: "label.pressure")
+        let m = s.memory
+        text(ctx, labelPieces("記憶體壓力"), x: Layout.pressureX, baseline: Layout.heroLabelBase, id: "label.pressure")
         let lvl = m.pressurePercent == nil ? nil : m.pressureLevel
         let col = lvl.map(Theme.pressureText) ?? Theme.value
         let pv: [Piece] = m.pressurePercent.map {
             [Piece(text: "\($0)", font: Fonts.num(Size.main), color: col, cls: "digit", minPx: 64),
              Piece(text: "%", font: Fonts.num(Size.unit), color: col, cls: "symbol", gapBefore: 4)]
         } ?? [Piece(text: "—", font: Fonts.num(Size.main), color: Theme.value, cls: "symbol")]
-        text(ctx, pv, x: c.x, baseline: c.valueBase, id: "value.pressure")
-        cellLog.append((0, 1, ["label.pressure"], "value.pressure"))
-        // level pill: fixed slot (never moves), pressure hue with dark text; grey "未知"/"UNKNOWN" when the source failed
-        let pill = geo.pill
+        text(ctx, pv, x: Layout.pressureX, baseline: Layout.heroBase, id: "value.pressure")
+        // level pill: fixed slot (never moves), pressure hue with dark text; grey "未知" when the source failed
+        let pill = Layout.pill
         ctx.setFillColor(lvl == nil ? Theme.pillUnknown : col)
         ctx.addPath(CGPath(roundedRect: pill, cornerWidth: 14, cornerHeight: 14, transform: nil)); ctx.fillPath()
         boxes.append(("pill", pill))
-        let word = L10n.level(lvl, lang)
+        let word = lvl?.word ?? "未知"
         text(ctx, labelPieces(word, color: lvl == nil ? Theme.value : Theme.bg, cjkFace: "Semibold"), x: pill.midX, baseline: pill.midY + 13, align: .center, id: "pill.word")
         boxes.removeLast()   // pill text lies inside the pill box by design
     }
 
     func drawGraph(_ ctx: CGContext, _ s: PanelState) {
-        let g = geo.graph
+        let g = Layout.graph
         ctx.setFillColor(Theme.well)
         ctx.addPath(CGPath(roundedRect: g, cornerWidth: 10, cornerHeight: 10, transform: nil)); ctx.fillPath()
         boxes.append(("graph", g))
@@ -581,14 +405,10 @@ final class PanelRenderer {
         ctx.restoreGState()
     }
 
-    /// Axis labels under the active view's graph. Memory uses the pressure-history coverage, CPU / network the
-    /// SystemSampler coverage.
     func drawAxis(_ ctx: CGContext, _ s: PanelState) {
-        let cov = s.view == .memory ? s.historyCoverage : s.sysCoverage
-        let left = L10n.axisLeft(coverage: cov, span: graphSpan, lang)
-        text(ctx, labelPieces(left), x: geo.graph.minX, baseline: geo.axisBase, id: "label.axisLeft")
-        text(ctx, labelPieces(L10n.t(.axisNow, lang)), x: geo.graph.maxX, baseline: geo.axisBase, align: .right, id: "label.axisNow")
-        cellLog.append((8, 0, ["label.axisLeft"], "")); cellLog.append((8, 1, ["label.axisNow"], ""))
+        let left = s.historyCoverage >= graphSpan ? "十分鐘前" : "收集中 \(Int(s.historyCoverage / 60))/10 分鐘"
+        text(ctx, labelPieces(left), x: Layout.graph.minX, baseline: Layout.axisBase, id: "label.axisLeft")
+        text(ctx, labelPieces("現在"), x: Layout.graph.maxX, baseline: Layout.axisBase, align: .right, id: "label.axisNow")
     }
 
     /// Grid order = AM footer blocks: row 1 = AM left block (Physical, Cached, Swap), row 2 = AM right block (App, Wired, Compressed).
@@ -596,15 +416,13 @@ final class PanelRenderer {
         ("實體記憶體", "physical"), ("快取的檔案", "cached"), ("使用的交換檔", "swap"),
         ("APP 記憶體", "app"), ("系統核心記憶體", "wired"), ("已壓縮", "compressed"),
     ]
-    static let secKeys: [L10n.Key] = [.memPhysical, .memCached, .memSwap, .memApp, .memWired, .memCompressed]
     func drawSecondary(_ ctx: CGContext, _ s: PanelState, _ i: Int) {
         let m = s.memory
         let v: Shown = [m.physical, m.cached, m.swap, m.app, m.wired, m.compressed][i]
-        let key = Self.secCells[i].key
-        let c = geo.cells[[Region.sec0, .sec1, .sec2, .sec3, .sec4, .sec5][i]]!
-        text(ctx, labelPieces(T(Self.secKeys[i])), x: c.x, baseline: c.labelBase, id: "label.\(key)")
-        text(ctx, valuePieces(v, size: Size.secondary, minPx: 40), x: c.x, baseline: c.valueBase, id: "value.\(key)")
-        cellLog.append((c.row, c.col, ["label.\(key)"], "value.\(key)"))
+        let c = Self.secCells[i]
+        let row = i / 3, col = i % 3
+        text(ctx, labelPieces(c.label), x: Layout.secColX[col], baseline: Layout.secLabelBase[row], id: "label.\(c.key)")
+        text(ctx, valuePieces(v, size: Size.secondary, minPx: 40), x: Layout.secColX[col], baseline: Layout.secValueBase[row], id: "value.\(c.key)")
     }
 
     // MARK: batteries
@@ -633,8 +451,8 @@ final class PanelRenderer {
 
     func drawBatteries(_ ctx: CGContext, _ s: PanelState) {
         if s.devices.isEmpty {
-            text(ctx, labelPieces(L10n.t(.noDevices1, lang)), x: Layout.RL, baseline: 92, id: "label.nodev1")
-            text(ctx, labelPieces(L10n.t(.noDevices2, lang)), x: Layout.RL, baseline: 146, id: "label.nodev2")
+            text(ctx, labelPieces("沒有已連線的"), x: Layout.RL, baseline: 92, id: "label.nodev1")
+            text(ctx, labelPieces("藍牙周邊"), x: Layout.RL, baseline: 146, id: "label.nodev2")
             return
         }
         let pages = Self.pages(s.devices)
@@ -644,7 +462,7 @@ final class PanelRenderer {
             switch b {
             case .hid(let d):
                 let base = top + Layout.mainInk
-                drawCellRow(ctx, label: L10n.cellLabel(d.kind.label, lang), tag: d.ownerTag, state: d.cells.first?.state, connected: d.connected,
+                drawCellRow(ctx, label: d.kind.label, tag: d.ownerTag, state: d.cells.first?.state, connected: d.connected,
                             xl: Layout.RL, xr: Layout.RR, base: base, id: "dev\(bi)")
                 top = base + Layout.batPitch - Layout.mainInk
             case .pods(let d):
@@ -657,39 +475,29 @@ final class PanelRenderer {
                 let box = CGRect(x: box0.minX, y: boxTop, width: box0.width, height: h)
                 ctx.setFillColor(Theme.well)
                 ctx.addPath(CGPath(roundedRect: box, cornerWidth: 14, cornerHeight: 14, transform: nil)); ctx.fillPath()
-                // header: "AIRPODS" or, when two groups share the kind, "AIRPODS · TAG" → "耳機 · TAG" (truncated to fit);
-                // English: "AIRPODS · TAG" → "PODS · TAG" → "TAG" (truncated)
+                // header: "AIRPODS" or, when two groups share the kind, "AIRPODS · TAG" → "耳機 · TAG" (truncated to fit)
                 let inner = (Layout.RL + 16, Layout.RR - 16)
-                var head = L10n.cellLabel(d.kind.label, lang)
+                var head = d.kind.label
                 if let o = d.ownerTag {
                     var tag = o
-                    head = "\(L10n.cellLabel(d.kind.label, lang)) · \(tag)"
-                    if lang == .zh {
-                        let room = inner.1 - inner.0 - (d.connected ? 0 : 90)   // offline / nearby: room for 「離線」/「附近」
-                        if width(labelPieces(head)) > room { head = "耳機 · \(tag)" }
-                        while width(labelPieces(head)) > room && tag.count > 1 { tag.removeLast(); head = "耳機 · \(tag)" }
-                    } else {
-                        let word = d.connected ? 0 : width(labelPieces(L10n.t(d.presence == .nearby ? .batNearby : .batOffline, .en))) + 30
-                        let room = inner.1 - inner.0 - word
-                        let short = L10n.t(.batPodsShort, .en)
-                        if width(labelPieces(head)) > room { head = "\(short) · \(tag)" }
-                        if width(labelPieces(head)) > room { head = tag }
-                        while width(labelPieces(head)) > room && tag.count > 1 { tag.removeLast(); head = tag }
-                    }
+                    head = "\(d.kind.label) · \(tag)"
+                    let room = inner.1 - inner.0 - (d.connected ? 0 : 90)   // offline / nearby: room for 「離線」/「附近」
+                    if width(labelPieces(head)) > room { head = "耳機 · \(tag)" }
+                    while width(labelPieces(head)) > room && tag.count > 1 { tag.removeLast(); head = "耳機 · \(tag)" }
                 }
                 let allStale = !d.cells.isEmpty && d.cells.allSatisfy { $0.state == .stale }
                 let hc = (d.showsCells && !allStale) ? Theme.label : Theme.offline
                 text(ctx, labelPieces(head, color: hc), x: inner.0, baseline: hb, id: "label.dev\(bi).head")
                 if !d.showsCells {
-                    text(ctx, labelPieces(L10n.t(.batOffline, lang), color: Theme.offline), x: inner.1, baseline: hb, align: .right, id: "value.dev\(bi).offline")
+                    text(ctx, labelPieces("離線", color: Theme.offline), x: inner.1, baseline: hb, align: .right, id: "value.dev\(bi).offline")
                 } else {
                     let nearby = d.presence == .nearby
                     if nearby {   // not connected to this Mac, fresh IOPS / BLE values: 「附近」 where 「離線」 would be, grey numbers
-                        text(ctx, labelPieces(L10n.t(.batNearby, lang), color: Theme.nearby), x: inner.1, baseline: hb, align: .right, id: "value.dev\(bi).nearby")
+                        text(ctx, labelPieces("附近", color: Theme.nearby), x: inner.1, baseline: hb, align: .right, id: "value.dev\(bi).nearby")
                     }
                     var base = hb + 16 + Layout.mainInk
                     for (ci, c) in d.cells.enumerated() {
-                        drawCellRow(ctx, label: L10n.cellLabel(c.label, lang), state: c.state, connected: true, nearby: nearby,
+                        drawCellRow(ctx, label: c.label, state: c.state, connected: true, nearby: nearby,
                                     xl: inner.0, xr: inner.1, base: base, id: "dev\(bi).\(ci)")
                         rowsBottom = base + 30
                         base += Layout.batPitch
@@ -706,49 +514,37 @@ final class PanelRenderer {
     }
 
     /// One battery row: label left (+ " · TAG" when two devices share the kind, truncated to fit); right-aligned number;
-    /// to its left an optional charging bolt (≥32 px) and the low-battery cue (≤20 %): zh = inverted 「低」 chip (v1,
-    /// unchanged); en = the number itself inverted (dark digits in a white box, no extra width — "LOW" + bolt + "20%"
-    /// leaves no room for an English label). Bar under the digits (white + thicker when low). Never a stale number.
-    /// `.stale` (connection unknown: sp stale) → whole row grey "—". `nearby`: number + bolt in Theme.nearby grey.
+    /// to its left an optional charging bolt (≥32 px) and an optional inverted "低" chip (≤20 %); bar under the digits
+    /// (white + thicker when low). Never a stale number. `.stale` (connection unknown: sp stale) → whole row grey "—".
+    /// `nearby` (AirPods not connected to this Mac, fresh IOPS/BLE value): same sizes, number + bolt in Theme.nearby grey,
+    /// grey bar; the white 「低」 chip still marks ≤ 20 %.
     func drawCellRow(_ ctx: CGContext, label: String, tag: String? = nil, state: CellState?, connected: Bool, nearby: Bool = false,
                      xl: CGFloat, xr: CGFloat, base: CGFloat, id: String) {
         let grey = !connected || state == .stale
         let lc = grey ? Theme.offline : Theme.label
         var leftEdge: CGFloat   // left end of the right-hand content (value, bolt, chip, "離線")
         if !connected {
-            leftEdge = text(ctx, labelPieces(L10n.t(.batOffline, lang), color: Theme.offline), x: xr, baseline: base - 16, align: .right, id: "value.\(id).offline").minX
+            leftEdge = text(ctx, labelPieces("離線", color: Theme.offline), x: xr, baseline: base - 16, align: .right, id: "value.\(id).offline").minX
         } else {
             switch state {
             case .ok(let p, let charging)?:
                 let low = p <= 20
-                let invert = low && lang == .en
-                let vc = invert ? Theme.bg : (nearby ? Theme.nearby : Theme.value)
-                let pieces = [Piece(text: "\(p)", font: Fonts.num(Size.main), color: vc, cls: "digit", minPx: 64),
-                              Piece(text: "%", font: Fonts.num(Size.unit), color: vc, cls: "symbol", gapBefore: 4)]
-                if invert {   // white box first, then the dark number inside it
-                    let w = width(pieces)
-                    let boxR = CGRect(x: xr - 10 - w - 12, y: base - Layout.mainInk - 6, width: w + 22, height: Layout.mainInk + 14)
-                    ctx.setFillColor(Theme.attention)
-                    ctx.addPath(CGPath(roundedRect: boxR, cornerWidth: 12, cornerHeight: 12, transform: nil)); ctx.fillPath()
-                    boxes.append(("lowbox.\(id)", boxR))
-                    text(ctx, pieces, x: xr - 10, baseline: base, align: .right, id: "value.\(id)")
-                    boxes.removeLast()   // the number lies inside its box by design
-                    leftEdge = boxR.minX
-                } else {
-                    let num = text(ctx, pieces, x: xr, baseline: base, align: .right, id: "value.\(id)")
-                    leftEdge = num.minX
-                }
+                let vc = nearby ? Theme.nearby : Theme.value
+                let num = text(ctx, [Piece(text: "\(p)", font: Fonts.num(Size.main), color: vc, cls: "digit", minPx: 64),
+                                     Piece(text: "%", font: Fonts.num(Size.unit), color: vc, cls: "symbol", gapBefore: 4)],
+                               x: xr, baseline: base, align: .right, id: "value.\(id)")
+                leftEdge = num.minX
                 let midY = base - Layout.mainInk / 2
                 if charging {
                     let r = CGRect(x: leftEdge - 12 - 24, y: (midY - 20).rounded(), width: 24, height: 40)
-                    drawBolt(ctx, r, nearby ? Theme.nearby : Theme.value); boxes.append(("bolt.\(id)", r)); leftEdge = r.minX
+                    drawBolt(ctx, r, vc); boxes.append(("bolt.\(id)", r)); leftEdge = r.minX
                 }
-                if low && !invert {
+                if low {
                     let chip = CGRect(x: leftEdge - 12 - 58, y: (midY - 25).rounded(), width: 58, height: 50)
                     ctx.setFillColor(Theme.attention)
                     ctx.addPath(CGPath(roundedRect: chip, cornerWidth: 12, cornerHeight: 12, transform: nil)); ctx.fillPath()
                     boxes.append(("chip.\(id)", chip))
-                    text(ctx, labelPieces(L10n.t(.batLow, lang), color: Theme.bg, cjkFace: "Semibold"), x: chip.midX, baseline: chip.midY + 13, align: .center, id: "chip.\(id).word")
+                    text(ctx, labelPieces("低", color: Theme.bg, cjkFace: "Semibold"), x: chip.midX, baseline: chip.midY + 13, align: .center, id: "chip.\(id).word")
                     boxes.removeLast()
                     leftEdge = chip.minX
                 }
@@ -793,44 +589,19 @@ final class PanelRenderer {
         ctx.setFillColor(c); ctx.addPath(p); ctx.fillPath()
     }
 
-    /// Clock of the ACTIVE view's sample. Battery column visible → bottom of the battery column (v1 position, label left,
-    /// time right-aligned). Hidden → a grid cell (label above, time below) in the last column of the bottom grid row.
-    /// `sampleStale` replaces the label by the inverted 「停滯」/"STALE" chip.
     func drawClock(_ ctx: CGContext, _ s: PanelState) {
-        let word = L10n.t(.stale, lang)
-        let chipW = lang == .zh ? 100 : max(100, (width(labelPieces(word)) + 24).rounded())
-        if let c = geo.cells[.clock] {
-            if s.sampleStale {
-                let chip = CGRect(x: c.x, y: c.labelBase - 45, width: chipW, height: 48)
-                ctx.setFillColor(Theme.attention)
-                ctx.addPath(CGPath(roundedRect: chip, cornerWidth: 12, cornerHeight: 12, transform: nil)); ctx.fillPath()
-                boxes.append(("chip.stale", chip))
-                text(ctx, labelPieces(word, color: Theme.bg, cjkFace: "Semibold"), x: chip.midX, baseline: chip.midY + 13, align: .center, id: "chip.stale.word")
-                boxes.removeLast()
-                cellLog.append((c.row, c.col, ["chip.stale"], "value.clock"))
-            } else {
-                text(ctx, labelPieces(L10n.t(.clockLabel, lang)), x: c.x, baseline: c.labelBase, id: "label.clock")
-                cellLog.append((c.row, c.col, ["label.clock"], "value.clock"))
-            }
-            text(ctx, [Piece(text: s.clock, font: Fonts.num(Size.secondary, .medium), color: Theme.unit, cls: "digit", minPx: 40)],
-                 x: c.x, baseline: c.valueBase, id: "value.clock")
-            return
-        }
         if s.sampleStale {
-            let chip = CGRect(x: Layout.RL, y: 652, width: chipW, height: 52)
+            let chip = CGRect(x: Layout.RL, y: 652, width: 100, height: 52)
             ctx.setFillColor(Theme.attention)
             ctx.addPath(CGPath(roundedRect: chip, cornerWidth: 12, cornerHeight: 12, transform: nil)); ctx.fillPath()
             boxes.append(("chip.stale", chip))
-            text(ctx, labelPieces(word, color: Theme.bg, cjkFace: "Semibold"), x: chip.midX, baseline: chip.midY + 13, align: .center, id: "chip.stale.word")
+            text(ctx, labelPieces("停滯", color: Theme.bg, cjkFace: "Semibold"), x: chip.midX, baseline: chip.midY + 13, align: .center, id: "chip.stale.word")
             boxes.removeLast()
-            cellLog.append((9, 0, ["chip.stale"], ""))
         } else {
-            text(ctx, labelPieces(L10n.t(.clockLabel, lang)), x: Layout.RL, baseline: Layout.clockBase - 4, id: "label.clock")
-            cellLog.append((9, 0, ["label.clock"], ""))
+            text(ctx, labelPieces("更新"), x: Layout.RL, baseline: Layout.clockBase - 4, id: "label.clock")
         }
         text(ctx, [Piece(text: s.clock, font: Fonts.num(Size.secondary, .medium), color: Theme.unit, cls: "digit", minPx: 40)],
              x: Layout.RR, baseline: Layout.clockBase, align: .right, id: "value.clock")
-        cellLog.append((9, 1, ["value.clock"], ""))
     }
 
     func drawSimFrame(_ ctx: CGContext) {
@@ -839,7 +610,7 @@ final class PanelRenderer {
     }
     func drawBadge(_ ctx: CGContext, _ badge: String) {
         var b = badge
-        while width(labelPieces(b, color: Theme.sim)) > geo.LR - Layout.L && b.count > 4 { b = String(b.dropLast(2)) + "…" }
+        while width(labelPieces(b, color: Theme.sim)) > Layout.LR - Layout.L && b.count > 4 { b = String(b.dropLast(2)) + "…" }
         text(ctx, labelPieces(b, color: Theme.sim), x: Layout.L, baseline: Layout.badgeBase, id: "label.sim")
     }
 
@@ -850,8 +621,8 @@ final class PanelRenderer {
         let safe = CGRect(x: 8, y: 8, width: Layout.W - 16, height: Layout.H - 16)
         for b in boxes where !b.r.isNull && !safe.contains(b.r) { out.append("off-canvas \(b.id) \(b.r.integral)") }
         for b in boxes where !b.r.isNull && b.id != "graph" {
-            let inLeft = b.r.minX >= Layout.L - 1 && b.r.maxX <= geo.LR + 1
-            let inRight = geo.battery && b.r.minX >= Layout.RL - 1 && b.r.maxX <= Layout.RR + 1
+            let inLeft = b.r.minX >= Layout.L - 1 && b.r.maxX <= Layout.LR + 1
+            let inRight = b.r.minX >= Layout.RL - 1 && b.r.maxX <= Layout.RR + 1
             if !(inLeft || inRight) { out.append("outside column grid \(b.id) \(b.r.integral)") }
         }
         func contained(_ a: String, _ b: String) -> Bool {   // text inside the AirPods box is by design
@@ -872,55 +643,44 @@ final class PanelRenderer {
             let owner = s.label.components(separatedBy: "[").first!
             if b.id == owner || b.id.hasPrefix("box") { continue }
             if (b.id == "pill" && owner == "pill.word") || (b.id.hasPrefix("chip") && owner.hasPrefix(b.id)) { continue }
-            if b.id.hasPrefix("lowbox.") && owner == "value." + b.id.dropFirst("lowbox.".count) { continue }   // en inverted number
             if s.rect.intersects(b.r) { out.append("measure-rect \(s.label) \(s.rect) touches \(b.id)") }
         } }
-        // v2: in-process glyph guard (the same thresholds glyphheight checks on the PNG): vector ink height of every
-        // binding piece ≥ its minPx; digits use their smallest single digit
-        for s in specs where s.minPx > 0 && !s.label.hasPrefix("glyph:") && s.inkH.rounded(.down) < CGFloat(s.minPx) {
-            out.append("glyph \(s.label) ink \(String(format: "%.1f", s.inkH)) px < \(s.minPx)")
-        }
         // judges' must-fixes
         for l in labelTexts where l.text.contains(where: { $0.isLowercase }) { out.append("lowercase in label \(l.id): \(l.text)") }
         let box = Dictionary(boxes.map { ($0.id, $0.r) }, uniquingKeysWith: { a, _ in a })
-        func union(_ ids: [String]) -> CGRect { ids.compactMap { box[$0] }.filter { !$0.isNull }.reduce(CGRect.null) { $0.union($1) } }
-        // adjacency: in every row, consecutive cells' labels and values ≥ 30 px apart (rows 0 hero, 1…2 grid, 8 axis, 9 clock)
-        let rows = Dictionary(grouping: cellLog, by: { $0.row })
-        for (row, cells) in rows {
-            let sorted = cells.sorted { $0.col < $1.col }
-            for k in 0..<max(0, sorted.count - 1) {
-                let a = sorted[k], b = sorted[k + 1]
-                for kind in ["label", "value"] {
-                    let ra = kind == "label" ? union(a.labels) : (a.value.isEmpty ? union(a.labels) : box[a.value] ?? .null)
-                    let rb = kind == "label" ? union(b.labels) : (b.value.isEmpty ? union(b.labels) : box[b.value] ?? .null)
-                    if ra.isNull || rb.isNull { continue }
-                    let gap = rb.minX - ra.maxX
-                    if gap < 30 { out.append("adjacent \(kind) gap \(Int(gap)) px < 30 (row \(row): \(a.labels.first ?? a.value) → \(b.labels.first ?? b.value))") }
+        let keys = Self.secCells.map { $0.key }
+        for row in 0..<2 {
+            for col in 0..<2 {
+                for kind in ["value", "label"] {
+                    if let a = box["\(kind).\(keys[row * 3 + col])"], let b = box["\(kind).\(keys[row * 3 + col + 1])"], !a.isNull, !b.isNull {
+                        let gap = b.minX - a.maxX
+                        if gap < 30 { out.append("adjacent \(kind) gap \(Int(gap)) px < 30 (\(keys[row * 3 + col]) → \(keys[row * 3 + col + 1]))") }
+                    }
                 }
             }
         }
-        // proximity (2-row grids): label→own value gap × 1.5 ≤ value→next label gap, per column
-        for c in cellLog where c.row == 1 {
-            guard let below = cellLog.first(where: { $0.row == 2 && $0.col == c.col }) else { continue }
-            let l = union(c.labels), n = union(below.labels)
-            guard let v = box[c.value], !v.isNull, !l.isNull, !n.isNull, v.height > 20 else { continue }
-            let g1 = v.minY - l.maxY, g2 = n.minY - v.maxY
-            if g2 < 1.5 * g1 { out.append("proximity \(c.value): label→value \(Int(g1)) vs value→next label \(Int(g2))") }
+        for col in 0..<3 {   // proximity: label→own value gap × 1.5 ≤ value→next label gap
+            if let l = box["label.\(keys[col])"], let v = box["value.\(keys[col])"], let n = box["label.\(keys[col + 3])"], !v.isNull, v.height > 20 {
+                let g1 = v.minY - l.maxY, g2 = n.minY - v.maxY
+                if g2 < 1.5 * g1 { out.append("proximity \(keys[col]): label→value \(Int(g1)) vs value→next label \(Int(g2))") }
+            }
         }
         return out
     }
 
-    /// Gap metrics for the report (every grid / hero row).
+    /// Gap metrics for the report (secondary grid).
     func gapReport() -> [String] {
         let box = Dictionary(boxes.map { ($0.id, $0.r) }, uniquingKeysWith: { a, _ in a })
+        let keys = Self.secCells.map { $0.key }
         var out: [String] = []
-        let rows = Dictionary(grouping: cellLog.filter { !$0.value.isEmpty }, by: { $0.row })
-        for row in rows.keys.sorted() {
-            let s = rows[row]!.sorted { $0.col < $1.col }
-            for k in 0..<max(0, s.count - 1) {
-                if let a = box[s[k].value], let b = box[s[k + 1].value], !a.isNull, !b.isNull {
-                    out.append("row \(row) value gap \(s[k].value)→\(s[k + 1].value) = \(Int(b.minX - a.maxX)) px")
-                }
+        for row in 0..<2 { for col in 0..<2 {
+            if let a = box["value.\(keys[row * 3 + col])"], let b = box["value.\(keys[row * 3 + col + 1])"], !a.isNull, !b.isNull {
+                out.append("value gap \(keys[row * 3 + col])→\(keys[row * 3 + col + 1]) = \(Int(b.minX - a.maxX)) px")
+            }
+        } }
+        for col in 0..<3 {
+            if let l = box["label.\(keys[col])"], let v = box["value.\(keys[col])"], let n = box["label.\(keys[col + 3])"], !v.isNull, v.height > 20 {   // "—" excluded
+                out.append("proximity \(keys[col]): label→value \(Int(v.minY - l.maxY)) px, value→next label \(Int(n.minY - v.maxY)) px")
             }
         }
         return out

@@ -15,18 +15,28 @@ enum StartInfo {
     }()
 
     /// Body of the `START` line (spec §12). `mibs` = "resolved/total" from SysctlTable.
-    static func startBody(config: Config, mode: Config.Mode, selftest: String, mibs: String) -> String {
-        "build=\(buildHash) pid=\(getpid()) mode=\(mode.rawValue) args=\(EventLog.q(config.argsQuoted)) mem_hz=\(fmt(config.memHz)) "
+    /// v2 (spec §7): `ui` = the settings model of this run → view= battery= lang= lang_resolved= hotkeys= settings_src=.
+    static func startBody(config: Config, mode: Config.Mode, selftest: String, mibs: String, ui: SettingsModel? = nil) -> String {
+        var b = "build=\(buildHash) pid=\(getpid()) mode=\(mode.rawValue) args=\(EventLog.q(config.argsQuoted)) mem_hz=\(fmt(config.memHz)) "
             + "audit_hz=\(fmt(config.auditHz)) sp_period=\(fmt(config.spPeriod)) log_level=\(config.logLevel.rawValue) "
-            + "summary_s=\(fmt(config.summarySeconds)) selftest=\(selftest) mibs=\(mibs) locale=\(Locale.current.identifier) sim=0"
+            + "summary_s=\(fmt(config.summarySeconds)) selftest=\(selftest) mibs=\(mibs) locale=\(Locale.current.identifier)"
+        if let ui { b += " " + uiTokens(ui, hotkeys: config.hotkeys && mode == .app) + " mem_display_hz=\(fmt(config.memDisplayHz))" }
+        return b + " sim=0"
+    }
+
+    static func uiTokens(_ ui: SettingsModel, hotkeys: Bool) -> String {
+        let e = ui.effective
+        return "view=\(e.view.token) battery=\(e.batteryVisible ? 1 : 0) lang=\(e.language.rawValue) lang_resolved=\(ui.resolvedLang.rawValue) "
+            + "hotkeys=\(hotkeys ? 1 : 0) settings_src=\(ui.sources)"
     }
     static func fmt(_ d: Double) -> String { d == d.rounded() ? String(Int(d)) : String(d) }
 }
 
 /// stdout SUM body (EventLog.summary adds "HH:MM:SS SUM "):
-/// used="18.52 GB" press=48%/1 swap="39.8 MB" kb=100 tp=85 airpods=- mode=mte sim=0
+/// used="18.52 GB" press=48%/1 swap="39.8 MB" kb=100 tp=85 airpods=- mode=mte cpu=4.99/16.65 net=5.91Mb/156.59kb view=mem sim=0
+/// (v2 cpu= system/user %, net= download/upload in AM bit units without "/s", "-" while unknown; spec §9.1)
 enum SummaryFormat {
-    static func body(sample: MemSample?, groups: [DeviceGroup], sim: Bool) -> String {
+    static func body(sample: MemSample?, groups: [DeviceGroup], sim: Bool, sys: SysSample? = nil, view: ViewKind = .memory) -> String {
         func str(_ f: Field) -> String {
             guard let s = sample, let v = s.strings[f], let t = v else { return "-" }
             return EventLog.q(t)
@@ -51,7 +61,18 @@ enum SummaryFormat {
             pods = g.showsCells ? (g.presence == .nearby ? "~" : "") + g.cells.map { cell($0.state, connected: true) }.joined(separator: "/") : "off"
         }
         return "used=\(str(.used)) press=\(press) swap=\(str(.swap)) kb=\(first(.keyboard)) tp=\(first(.trackpad)) "
-            + "mouse=\(first(.mouse)) airpods=\(pods) mode=\(sample?.mode.rawValue ?? "-") sim=\(sim ? 1 : 0)"
+            + "mouse=\(first(.mouse)) airpods=\(pods) mode=\(sample?.mode.rawValue ?? "-") \(sysTokens(sys)) view=\(view.token) sim=\(sim ? 1 : 0)"
+    }
+
+    /// "cpu=4.99/16.65 net=5.91Mb/156.59kb" ("-" for an unknown part).
+    static func sysTokens(_ s: SysSample?) -> String {
+        let cpu = s?.cpu.value.map { "\(L10n.fmt2($0.system))/\(L10n.fmt2($0.user))" } ?? "-"
+        var net = "-"
+        if let n = s?.net.value, let rx = n.rxRate, let tx = n.txRate {
+            func sp(_ b: Double) -> String { L10n.speed(bytesPerSecond: b, .en).replacingOccurrences(of: "/s", with: "").replacingOccurrences(of: " ", with: "") }
+            net = "\(sp(rx))/\(sp(tx))"
+        }
+        return "cpu=\(cpu) net=\(net)"
     }
 }
 

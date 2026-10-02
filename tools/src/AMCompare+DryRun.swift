@@ -103,7 +103,7 @@ final class SyntheticLog {
     }
     func dsp(_ t: Date, mem: UInt64, regions: String) {
         dspSeq += 1
-        appendText("\(isoNow(t)) DSP seq=\(dspSeq) mem_seq=\(mem) clock=00:00:00 regions=\(regions) bat=\"kb:100\" page=1/1 stale=0 sim=0\n", path)
+        appendText("\(isoNow(t)) DSP seq=\(dspSeq) mem_seq=\(mem) clock=00:00:00 regions=\(regions) bat=\"kb:100\" page=1/1 stale=0 view=mem lang=zh batv=1 sim=0\n", path)
     }
     func aud(_ t: Date) { appendText("\(isoNow(t)) AUD fresh=1 same=0 age_ms=- d_used=3 d_cached=0 d_app=-1 d_wired=0 d_comp=0 free_err=2 mode=mte\n", path) }
 }

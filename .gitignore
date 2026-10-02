@@ -1,4 +1,5 @@
-evidence/
+# evidence output only; anchored because core.ignorecase=true made `evidence/` also ignore Sources/Evidence/ (build sources)
+/evidence/
 .build/
 *.xcuserdata
 .DS_Store

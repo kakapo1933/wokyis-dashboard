@@ -14,6 +14,10 @@
 //   HEALTH occluded=N                               → fallback occlusion state (N>0 = occluded until the next HEALTH)
 //   START / STOP                                    → process-run boundaries (intervals never span a restart)
 //   HIST n=  ERR src= err=  WARN  CTL  DEV          → counts / listings
+//   v2: CPU sys= user= idle= fail= skip=            → averages, fail / skip counts
+//       NET rx_bps= tx_bps= fail= skip=             → p50 / p99, fail / skip counts; WARN net_counter_reset count
+//       UI event= from= to= via=                    → per event counts; DSP view= → regions histogram per view;
+//       HEALTH passes= view= mem_hz=                → last values
 // An interval is attributed to the occlusion state at its START. With `log_level=summary` (D4 default) MEM is
 // decimated to one line per summary-seconds and DSP is absent → the MEM verdict is marked NOT APPLICABLE; criterion #6
 // evidence must come from a `--log-level sample` run.
@@ -29,6 +33,7 @@ struct LogLine {
     var kv: [Substring: Substring]
     var quoted: [Substring: String]   // key → the "…" string following key=value (MEM field strings)
     var fileIndex: Int
+    var word: Substring = ""          // first body token (WARN net_counter_reset …)
 }
 
 enum TS {
@@ -115,9 +120,10 @@ func parseLine(_ raw: Substring, fileIndex: Int) -> LogLine? {
     let kind = rest[rest.startIndex..<sp2]
     let body = sp2 < rest.endIndex ? rest[rest.index(after: sp2)...] : Substring("")
     let (kv, qs) = (kind == "MEM" || kind == "BAT" || kind == "SP" || kind == "DSP" || kind == "WIN" || kind == "HEALTH" || kind == "START"
-                    || kind == "ERR" || kind == "HIST" || kind == "DEV" || kind == "STOP" || kind == "WARN" || kind == "CTL" || kind == "AUD")
+                    || kind == "ERR" || kind == "HIST" || kind == "DEV" || kind == "STOP" || kind == "WARN" || kind == "CTL" || kind == "AUD"
+                    || kind == "CPU" || kind == "NET" || kind == "UI")
         ? parseBody(body) : ([:], [:])
-    return LogLine(t: t, ts: ts, kind: kind, kv: kv, quoted: qs, fileIndex: fileIndex)
+    return LogLine(t: t, ts: ts, kind: kind, kv: kv, quoted: qs, fileIndex: fileIndex, word: body.prefix { $0 != " " })
 }
 
 // MARK: - statistics
@@ -171,6 +177,12 @@ struct Report {
     var dspCount = 0, dspStale = 0, dspSim = 0
     var dspInt = Dist()
     var dspRegions: [String: Int] = [:]
+    var dspRegionsByView: [String: [String: Int]] = [:]   // v2: DSP view= (no token = mem)
+    var cpuCount = 0, cpuFail = 0, cpuSkip = 0
+    var cpuSys = Dist(), cpuUser = Dist(), cpuIdle = Dist()
+    var netCount = 0, netFail = 0, netSkip = 0, netCounterReset = 0
+    var netRx = Dist(), netTx = Dist()
+    var ui: [String: Int] = [:]                            // UI event=… counts (dedup, view, battery, lang, mem_hz, …)
     var batPerDev: [String: Dist] = [:]
     var batLastSeen: [String: Double] = [:]
     var batFirstSeen: [String: Double] = [:]
@@ -275,7 +287,11 @@ func analyze(_ lines: [LogLine], manualOcc: [(Double, Double)], gapsTop: Int) ->
             r.dspCount += 1
             if l.kv["stale"] == "1" { r.dspStale += 1 }
             if l.kv["sim"] == "1" { r.dspSim += 1 }
-            for reg in (l.kv["regions"] ?? "").split(separator: ",") { r.dspRegions[String(reg), default: 0] += 1 }
+            let view = String(l.kv["view"] ?? "mem")
+            for reg in (l.kv["regions"] ?? "").split(separator: ",") {
+                r.dspRegions[String(reg), default: 0] += 1
+                r.dspRegionsByView[view, default: [:]][String(reg), default: 0] += 1
+            }
             if let p = prevDsp { r.dspInt.add(l.t - p) }
             prevDsp = l.t
         case "BAT":
@@ -292,6 +308,21 @@ func analyze(_ lines: [LogLine], manualOcc: [(Double, Double)], gapsTop: Int) ->
             if let ms = l.kv["ms"].flatMap({ Double($0) }) { r.spMs.add(ms / 1000) }
             if let rc = l.kv["rc"], rc != "0" { r.spFail["rc=\(rc)", default: 0] += 1 }
             if let tr = l.kv["trigger"] { r.spTrigger[String(tr), default: 0] += 1 }
+        case "CPU":
+            r.cpuCount += 1
+            if let f = l.kv["fail"], f != "-" { r.cpuFail += 1 }
+            if let k = l.kv["skip"], k != "-" { r.cpuSkip += 1 }
+            if let v = l.kv["sys"].flatMap({ Double($0) }) { r.cpuSys.add(v) }
+            if let v = l.kv["user"].flatMap({ Double($0) }) { r.cpuUser.add(v) }
+            if let v = l.kv["idle"].flatMap({ Double($0) }) { r.cpuIdle.add(v) }
+        case "NET":
+            r.netCount += 1
+            if let f = l.kv["fail"], f != "-" { r.netFail += 1 }
+            if let k = l.kv["skip"], k != "-" { r.netSkip += 1 }
+            if let v = l.kv["rx_bps"].flatMap({ Double($0) }) { r.netRx.add(v) }
+            if let v = l.kv["tx_bps"].flatMap({ Double($0) }) { r.netTx.add(v) }
+        case "UI":
+            r.ui[String(l.kv["event"] ?? "?"), default: 0] += 1
         case "HIST":
             if let n = l.kv["n"].flatMap({ Int($0) }) { r.hist.append(n) }
         case "HEALTH":
@@ -301,6 +332,7 @@ func analyze(_ lines: [LogLine], manualOcc: [(Double, Double)], gapsTop: Int) ->
         case "WARN":
             let first = l.kv.keys.sorted().first.map(String.init) ?? "?"
             r.warns[first, default: 0] += 1
+            if l.word == "net_counter_reset" { r.netCounterReset += 1 }
         case "CTL": r.ctl += 1
         case "DEV": r.dev.append("\(l.ts) dev=\(l.kv["dev"] ?? "?") kind=\(l.kv["kind"] ?? "?") \(l.kv["from"] ?? "?")→\(l.kv["to"] ?? "?") why=\(l.kv["why"] ?? "?")")
         case "WIN": r.win.append("\(l.ts) event=\(l.kv["event"] ?? "?")\(l.kv["occluded"].map { " occluded=\($0)" } ?? "")")
@@ -389,6 +421,20 @@ struct LogStats {
         p("DSP\tcount=\(r.dspCount)\trate=\(span > 0 ? String(format: "%.2f", Double(r.dspCount) / span) : "-")/s\tstale=1:\(r.dspStale)\tsim=1:\(r.dspSim)\tinterval \(r.dspInt.row())")
         if !r.dspRegions.isEmpty { p("DSP_regions\t" + r.dspRegions.sorted { $0.value > $1.value }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")) }
         p("")
+        if !r.dspRegionsByView.isEmpty && Set(r.dspRegionsByView.keys) != ["mem"] {
+            for (v, regs) in r.dspRegionsByView.sorted(by: { $0.key < $1.key }) {
+                p("DSP_regions[view=\(v)]\t" + regs.sorted { ($0.value, $1.key) > ($1.value, $0.key) }.map { "\($0.key)=\($0.value)" }.joined(separator: " "))
+            }
+        }
+        p("")
+        p("## CPU / NET (SystemSampler, 1 Hz; summary level decimates both like MEM)")
+        p("CPU\tlines=\(r.cpuCount)\tfail=\(r.cpuFail)\tskip=\(r.cpuSkip)\tsys_mean=\(r.cpuSys.mean.map { String(format: "%.2f", $0) } ?? "-")"
+          + "\tuser_mean=\(r.cpuUser.mean.map { String(format: "%.2f", $0) } ?? "-")\tidle_mean=\(r.cpuIdle.mean.map { String(format: "%.2f", $0) } ?? "-")")
+        p("NET\tlines=\(r.netCount)\tfail=\(r.netFail)\tskip=\(r.netSkip)\tcounter_reset=\(r.netCounterReset)"
+          + "\trx_bps p50=\(r.netRx.q(0.5).map { String(format: "%.0f", $0) } ?? "-") p99=\(r.netRx.q(0.99).map { String(format: "%.0f", $0) } ?? "-")"
+          + "\ttx_bps p50=\(r.netTx.q(0.5).map { String(format: "%.0f", $0) } ?? "-") p99=\(r.netTx.q(0.99).map { String(format: "%.0f", $0) } ?? "-")")
+        p("UI\t" + (r.ui.isEmpty ? "0" : r.ui.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")))
+        p("")
         p("## BAT (per device, interval between BAT lines)")
         for d in r.batCount.keys.sorted() {
             let dist = r.batPerDev[d] ?? Dist()
@@ -405,7 +451,8 @@ struct LogStats {
         p("HIST\tcount=\(r.hist.count)\tn_min=\(r.hist.min().map(String.init) ?? "-")\tn_last=\(r.hist.last.map(String.init) ?? "-")")
         if let h = r.health.last {
             let fps = r.health.compactMap { $0.1["footprint_mb"].flatMap { Double($0) } }
-            p("HEALTH\tcount=\(r.health.count)\tlast: cpu_s=\(h.1["cpu_s"] ?? "-") footprint_mb=\(h.1["footprint_mb"] ?? "-") rss_mb=\(h.1["rss_mb"] ?? "-")\tmax_footprint_mb=\(fps.max().map { String(format: "%.1f", $0) } ?? "-")")
+            p("HEALTH\tcount=\(r.health.count)\tlast: cpu_s=\(h.1["cpu_s"] ?? "-") footprint_mb=\(h.1["footprint_mb"] ?? "-") rss_mb=\(h.1["rss_mb"] ?? "-")"
+              + " passes=\(h.1["passes"] ?? "-") view=\(h.1["view"] ?? "-") mem_hz=\(h.1["mem_hz"] ?? "-")\tmax_footprint_mb=\(fps.max().map { String(format: "%.1f", $0) } ?? "-")")
         } else { p("HEALTH\tcount=0") }
         p("ERR\t" + (r.errs.isEmpty ? "0" : r.errs.sorted { $0.key < $1.key }.map { "\($0.key)×\($0.value)" }.joined(separator: "; ")))
         p("WARN\t" + (r.warns.isEmpty ? "0" : r.warns.sorted { $0.key < $1.key }.map { "\($0.key)×\($0.value)" }.joined(separator: "; ")))
@@ -436,7 +483,12 @@ struct LogStats {
                                    "log_level": r.logLevel, "occlusion_source": r.occ.source, "occluded_s": r.occludedSeconds,
                                    "mem": ["all": r.memAll.dict, "visible": r.memVis.dict, "occluded": r.memOcc.dict, "lines": r.memCount,
                                            "seq_gaps": r.memSeqGaps, "seq_missing": r.memSeqGapMissing],
-                                   "dsp": ["count": r.dspCount, "stale": r.dspStale, "sim": r.dspSim, "interval": r.dspInt.dict, "regions": r.dspRegions],
+                                   "dsp": ["count": r.dspCount, "stale": r.dspStale, "sim": r.dspSim, "interval": r.dspInt.dict, "regions": r.dspRegions,
+                                           "regions_by_view": r.dspRegionsByView],
+                                   "cpu": ["lines": r.cpuCount, "fail": r.cpuFail, "skip": r.cpuSkip, "sys": r.cpuSys.dict, "user": r.cpuUser.dict, "idle": r.cpuIdle.dict],
+                                   "net": ["lines": r.netCount, "fail": r.netFail, "skip": r.netSkip, "counter_reset": r.netCounterReset,
+                                           "rx_bps": r.netRx.dict, "tx_bps": r.netTx.dict],
+                                   "ui": r.ui,
                                    "sp": ["count": r.spCount, "interval": r.spInt.dict, "failures": r.spFail],
                                    "hist_count": r.hist.count, "errors": r.errs, "verdicts": verdicts, "overall": overall]
         var bat: [String: Any] = [:]
@@ -504,6 +556,27 @@ struct LogStats {
         expect("verdict-pass-at-3s", ok2 && text2.contains("verdict\tbat_interval_max[cc:dd]\tPASS"))
         let r2 = analyze(lines, manualOcc: [(1790802400 + 10, 1790802400 + 20)], gapsTop: 3)
         expect("manual-occ", r2.occ.source.hasPrefix("manual") && abs(r2.occludedSeconds - 10) < 1e-6 && abs((r2.memOcc.max ?? 0) - 0.25) < 1e-6)
+        // v2: CPU / NET / UI lines, DSP regions per view, WARN net_counter_reset
+        var V: [(Double, String)] = [(0, "START log_level=sample sim=0")]
+        for k in 0..<10 {
+            V.append((Double(k) + 0.01, "CPU seq=\(k) dur_us=120 sys=\(k == 3 ? "-" : "4.00") user=\(k == 3 ? "-" : "16.00") idle=\(k == 3 ? "-" : "80.00") nice=0.00 cores=12 threads=4783 procs=795 sim=0 fail=\(k == 3 ? "cpu.load" : "-") skip=\(k == 0 ? "baseline" : "-")"))
+            V.append((Double(k) + 0.02, "NET seq=\(k) dur_us=150 ifaces=14 pkt_in=1 pkt_out=1 pkt_in_s=- pkt_out_s=- rx=1 tx=1 rx_bps=\(k == 0 ? "-" : String(k * 1000)) tx_bps=\(k == 0 ? "-" : "500") sim=0 fail=- skip=-"))
+            V.append((Double(k) + 0.03, "DSP seq=\(k) mem_seq=- sys_seq=\(k) clock=05:07:13 regions=cpuSys,graph bat=\"hidden\" page=1/1 stale=0 draw_us=99 view=cpu lang=en batv=0 sim=0"))
+        }
+        V.append((5.5, "DSP seq=99 mem_seq=7 clock=05:07:13 regions=used,graph bat=\"kb:100\" page=1/1 stale=0 sim=0"))
+        V.append((6, "WARN net_counter_reset if=en0 field=ibytes"))
+        V.append((7, "UI event=view from=mem to=cpu via=hotkey"))
+        V.append((7.05, "UI event=dedup action=toggle_battery via=hotkey first_via=menu"))
+        V.append((8, "HEALTH cpu_s=1.0 footprint_mb=11 rss_mb=29 draws=60 passes=60 view=cpu mem_hz=1 sim=0"))
+        V.sort { $0.0 < $1.0 }
+        let rv = analyze(V.compactMap { parseLine(Substring(ts($0.0) + " " + $0.1), fileIndex: 0) }, manualOcc: [], gapsTop: 3)
+        expect("v2-cpu", rv.cpuCount == 10 && rv.cpuFail == 1 && rv.cpuSkip == 1 && abs((rv.cpuSys.mean ?? 0) - 4) < 1e-9 && rv.cpuSys.n == 9)
+        expect("v2-net", rv.netCount == 10 && rv.netRx.n == 9 && rv.netRx.max == 9000 && rv.netCounterReset == 1)
+        expect("v2-ui", rv.ui["view"] == 1 && rv.ui["dedup"] == 1)
+        expect("v2-dsp-by-view", rv.dspRegionsByView["cpu"]?["cpuSys"] == 10 && rv.dspRegionsByView["mem"]?["used"] == 1 && rv.dspRegions["graph"] == 11)
+        let (tv, _, _) = render(rv, memMax: 2, batMax: 60, spMax: 60, since: nil, until: nil)
+        expect("v2-render", tv.contains("DSP_regions[view=cpu]\tcpuSys=10") && tv.contains("CPU\tlines=10\tfail=1\tskip=1\tsys_mean=4.00")
+               && tv.contains("counter_reset=1") && tv.contains("UI\tdedup=1 view=1") && tv.contains("passes=60 view=cpu mem_hz=1"))
         // summary-level log → NOT APPLICABLE
         let sumLines = [parseLine(Substring(ts(0) + " START log_level=summary sim=0"), fileIndex: 0)!,
                         parseLine(Substring(ts(1) + " MEM seq=0 sim=0"), fileIndex: 0)!, parseLine(Substring(ts(11) + " MEM seq=40 sim=0"), fileIndex: 0)!]
