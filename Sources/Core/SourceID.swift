@@ -6,7 +6,9 @@ enum SourceID: String, CaseIterable, Sendable {
     case memPhysical = "mem.physical", memVM = "mem.vm", memSwap = "mem.swap", memLevel = "mem.level",
          memPressure = "mem.pressure", memAudit = "mem.audit", batHID = "bat.hid", batIOPS = "bat.iops", batSP = "bat.sp",
          // v2 (spec §9.2): SystemSampler sources. Appended → v1 ids keep their order (badge / CTL ordering).
-         cpuLoad = "cpu.load", cpuTasks = "cpu.tasks", netIF = "net.if"
+         cpuLoad = "cpu.load", cpuTasks = "cpu.tasks", netIF = "net.if",
+         // per-app traffic of the network view's side column (ProcNetSource). `fail` only.
+         netProc = "net.proc"
 
     /// Traditional-Chinese name used in the v1 simulation badge (`Injector.badge`, CTL / status.sh). Same strings as
     /// `L10n.sourceName(_, .zh)`, which is the single table (spec §9.2); the on-screen badge uses L10n directly.

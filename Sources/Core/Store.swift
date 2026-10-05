@@ -1,6 +1,7 @@
 // Store.swift — main-thread state: latest MemSample, pressure history, battery groups, paging, staleness, simulation
 // badge, v2 UI settings (view / language / battery column), SystemSampler values + CPU / network histories, and the set
-// of dirty regions (spec §4, §5.5, §5.6, §6.6, §7.3; v2 spec §6). Owner: app agent.
+// of dirty regions (spec §4, §5.5, §5.6, §6.6, §7.3; v2 spec §6), and the busiest apps of the network view's side
+// column (ProcNetMonitor). Owner: app agent.
 //
 // Every mutation rebuilds the per-region keys of the ACTIVE view (StateBuilder.regionKeys) and adds the regions whose key
 // changed to `dirty`. A change of the `.chrome` key (view, language, battery column, simulation frame) dirties every
@@ -54,6 +55,8 @@ final class Store {                              // main thread only
     private(set) var latestSys: SysSample?
     private(set) var lastSysArrival: Date?
     private(set) var sysSamples: UInt64 = 0
+    // network view side column (ProcNetMonitor; only measured while that column is on screen)
+    private(set) var netTop = NetTopDisplay.pending
     // pass merge
     private var activeSecond: Int?               // wall second of the last arrival of the active view's source
 
@@ -187,6 +190,22 @@ final class Store {                              // main thread only
         refresh(now: now)
     }
 
+    /// One nettop window (ProcNetMonitor). value → the rows; failed → "—" at once; skipped → keep the display.
+    func applyProcNet(_ r: Reading<[ProcTraffic]>, now: Date) {
+        switch r {
+        case .value(let list): netTop = StateBuilder.netTop(list)
+        case .skipped: break
+        case .failed: netTop = .failed
+        }
+        refresh(now: now)
+    }
+
+    /// The monitor was (re)started: the rows of an earlier visit are not "now" → 「收集中」 until the first window.
+    func resetProcNet(now: Date) {
+        netTop = .pending
+        refresh(now: now)
+    }
+
     /// Close the previous wall second in the pressure history, page rotation, staleness; `.graph` only when the active
     /// view's source has not arrived in this second (spec §6.2).
     func tick1Hz(now: Date) {
@@ -245,6 +264,7 @@ final class Store {                              // main thread only
         s.net = sysBlank ? .blank : netShown
         if withHistory { s.cpuHistory = cpuRing.view(); s.netHistory = netRing.view() }
         s.sysCoverage = coverage
+        s.netTop = netTop
         return s
     }
 

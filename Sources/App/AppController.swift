@@ -75,6 +75,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // v2
     let settings: SettingsModel
     private var sys: SystemSampler?
+    private var procNet: ProcNetMonitor?
+    private var procNetOn = false
     private var statusMenu: StatusMenu?
     private var hotKeys: HotKeys?
     private var hotkeysOK: Set<HotKeys.Key> = []
@@ -147,8 +149,10 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let sy = SystemSampler(injector: injector, log: log) { [weak self] x in self?.onSys(x) }   // onSample on main
         sys = sy
         sy.start()
+        procNet = ProcNetMonitor(injector: injector, log: log) { [weak self] r in self?.onProcNet(r) }   // onUpdate on main
         installStatusUI()
         updateMemHz(why: "start")
+        updateProcNet(why: "start")
 
         let sig = Signals(queue: .main) { [weak self] n in self?.onSignal(n) }
         sig.install([SIGINT, SIGTERM, SIGHUP, SIGUSR1, SIGUSR2])
@@ -203,6 +207,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
             store.setUI(e, lang: settings.resolvedLang, now: now)
             syncSimulation(now)
             if e.view != before.view { updateMemHz(why: "view") }
+            updateProcNet(why: ev)
             statusMenu?.update(e, resolved: settings.resolvedLang, system: settings.systemLang, hotkeysOK: hotkeysOK)
             push(now)
             log.event("UI", "event=\(ev) from=\(from) to=\(to)\(key == .language ? " resolved=\(settings.resolvedLang.rawValue)" : "") via=\(via)")
@@ -213,6 +218,20 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// (spec §5.4, lever L4).
     static func memHzTarget(view: ViewKind, visible: Bool, configured: Double) -> Double {
         view == .memory && visible ? configured : min(1, configured)
+    }
+
+    /// Per-app traffic is measured only while its column is on screen: network view, side column shown, window
+    /// visible (a nettop child per 2 s window otherwise costs CPU for nothing).
+    static func procNetWanted(view: ViewKind, sideColumn: Bool, visible: Bool) -> Bool { view == .network && sideColumn && visible }
+
+    private func updateProcNet(why: String) {
+        let e = settings.effective
+        let want = Self.procNetWanted(view: e.view, sideColumn: e.batteryVisible, visible: window != nil && !occluded)
+        guard want != procNetOn else { return }
+        procNetOn = want
+        log.event("UI", "event=net_proc on=\(want ? 1 : 0) why=\(why)")
+        if want { store.resetProcNet(now: Date()) }
+        procNet?.setActive(want)
     }
 
     private func updateMemHz(why: String) {
@@ -311,6 +330,14 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard phase != .exiting else { return }
         let now = Date()
         store.applySys(x, now: now)
+        syncSimulation(now)
+        push(now)
+    }
+
+    private func onProcNet(_ r: Reading<[ProcTraffic]>) {
+        guard phase != .exiting, procNetOn else { return }
+        let now = Date()
+        store.applyProcNet(r, now: now)
         syncSimulation(now)
         push(now)
     }
@@ -497,6 +524,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         view.visibleOnScreen = false
         setPhase(next, why)
         updateMemHz(why: "occluded")
+        updateProcNet(why: "occluded")
     }
 
     func windowDidEnterFullScreen(_ notification: Notification) {
@@ -611,6 +639,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         view.visibleOnScreen = vis
         log.event("WIN", "event=\(vis ? "visible" : "occluded") occluded=\(vis ? 0 : 1) source=\(source) active_space=\(w.isOnActiveSpace ? 1 : 0)")
         updateMemHz(why: vis ? "visible" : "occluded")
+        updateProcNet(why: vis ? "visible" : "occluded")
         if vis {
             store.markAll()
             push(Date())
@@ -928,6 +957,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window = nil
         sampler?.stop()
         sys?.stop()
+        procNet?.stop()                   // terminates a running nettop
         hotKeys?.unregisterAll()
         statusMenu?.remove()
         let child = battery?.childPID

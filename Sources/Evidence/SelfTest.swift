@@ -178,6 +178,7 @@ enum SelfTest {
         cases += renderCases()
         cases += MemorySelfTest.run()
         cases += SystemSelfTest.run()    // v2 SystemSampler: cpu.* / net.* / sys.* / sampler.set_hz (sampler agent)
+        cases += ProcNetSelfTest.run()   // netproc.*: nettop parser, app names, aggregation (sampler agent)
         cases += BatterySelfTest.run()
         cases += AppSelfTest.run()
         cases += SettingsSelfTest.run()       // v2 settings / UI actions (MemorySettingsStore, never UserDefaults)

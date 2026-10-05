@@ -13,6 +13,7 @@ SRC=(
   Sources/Render/PanelModel.swift Sources/Render/PanelRenderer.swift Sources/Render/StateBuilder.swift
   Sources/Render/L10n.swift Sources/Render/PanelRenderer+Views.swift Sources/Render/RenderSelfTest.swift
   Sources/System/CPUSource.swift Sources/System/NetSource.swift Sources/System/SystemSampler.swift
+  Sources/System/ProcNetSource.swift
   Sources/Memory/SysctlTable.swift Sources/Memory/MemoryFormulas.swift Sources/Memory/MemorySampler.swift
   Sources/Memory/HostAudit.swift Sources/Memory/AMFormat.swift Sources/Memory/PressureHistory.swift
   Sources/Battery/HIDSource.swift Sources/Battery/AccessorySource.swift Sources/Battery/BTProfilerSource.swift

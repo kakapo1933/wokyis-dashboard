@@ -241,7 +241,16 @@ cli_not_persisted,resolve}`, `ui.{dedup,switch_language,view_cycle,mem_hz_target
 stale_per_view,pass_merge,history_coverage,lang_net,badge_localized,mem_display_hz}`, `statebuilder.region_keys`,
 `dsp.view_tokens`, `injector.{new_ids,badge_parts}`, `eventlog.cpu_net`, `hotkeys.{mapping,fake_registrar,fire}`,
 `statusmenu.{model,model_en_failed_keys,no_hotkeys,symbols}`.
-Scripts / tools: `scripts/sim.sh` accepts `cpu.load cpu.tasks net.if` (fail; garbage also); `scripts/status.sh` prints the
+Network side column (busiest apps, added after v2): `SourceID.netProc = "net.proc"` (`fail` only);
+`struct ProcTraffic { name; rx, tx /* bytes/s */ }` (Types.swift); `ProcNetMonitor(injector:log:onUpdate:)` /
+`setActive(_:)` / `stop()` / `childPID` (Sources/System/ProcNetSource.swift; `onUpdate(Reading<[ProcTraffic]>)` on main,
+only while active); `Store.applyProcNet(_:now:)` / `resetProcNet(now:)`; `PanelState.netTop: NetTopDisplay`
+(`.pending | .failed | .rows([NetTopRow])`, ≤ `NetTopDisplay.maxRows`); `Region.netTop` takes the side column's rect on the
+network view (no `.battery` region there); `StateBuilder.netTop(_:)` / `netTopKey(_:)` / `dspNetTop(_:)`;
+`L10n.speedCompact(bytesPerSecond:)`; `AppController.procNetWanted(view:sideColumn:visible:)`; log `NETP` (sample level),
+`UI event=net_proc on= why=`, DSP trailing `top="…"`. Selftest: `netproc.{parse.last_block,parse.guards,names,aggregate,
+child_args}`, `store.net_top`, `dsp.net_top`, `fmt.speed_compact`, `render.net_top.fit_name`.
+Scripts / tools: `scripts/sim.sh` accepts `cpu.load cpu.tasks net.if` (fail; garbage also) and `net.proc` (fail); `scripts/status.sh` prints the
 current `ui: view= battery= lang=` (START + UI events) and the last CPU / NET / UI lines; `tools/bin/logstats` CPU / NET / UI
 sections, DSP regions per `view=`, HEALTH passes; `tools/bin/amcompare` joins only `view=mem` DSP commits (a CPU / network
 commit ends the previous memory commit's on-screen interval); `tools/c2measure.sh --render VIEW LANG yes|no` (live gate:

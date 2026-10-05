@@ -1,7 +1,7 @@
 #!/bin/bash
 # sim.sh — fault / simulation injection through run/control.json (spec §11). Every write goes to a temp file + mv (atomic).
 #   sim.sh fail ID… [--for S]            IDs: mem.physical mem.vm mem.swap mem.level mem.pressure mem.audit bat.hid bat.iops
-#                                              bat.sp cpu.load cpu.tasks net.if, or mem.mib:<sysctl name>
+#                                              bat.sp cpu.load cpu.tasks net.if net.proc, or mem.mib:<sysctl name>
 #   sim.sh hang bat.sp [--for S]         system_profiler replaced by /bin/sleep 3600, killed by the real 12 s watchdog
 #   sim.sh garbage ID [--for S]          bat.sp|bat.iops: "{not json" / a CFString to the real parser; cpu.load: ticks go
 #                                        backwards → dropped, baseline reset; cpu.tasks: threads=0 → implausible → "—";
@@ -45,7 +45,7 @@ jlist() { local out="" x; for x in "$@"; do out="$out${out:+,}\"$x\""; done; ech
 valid_id() {
   case "$1" in
     mem.physical|mem.vm|mem.swap|mem.level|mem.pressure|mem.audit|bat.hid|bat.iops|bat.sp) return 0 ;;
-    cpu.load|cpu.tasks|net.if) return 0 ;;
+    cpu.load|cpu.tasks|net.if|net.proc) return 0 ;;
     mem.mib:?*) return 0 ;;
     *) return 1 ;;
   esac

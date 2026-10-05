@@ -42,7 +42,9 @@ enum StateBuilder {
             .clock: s.clock + (s.sampleStale ? "|stale" : ""),
             .sim: s.simulationBadge ?? "",
         ]
-        if s.batteryVisible {
+        if s.batteryVisible && s.view == .network {
+            k[.netTop] = netTopKey(s.netTop)          // the side column shows the busiest apps, not the battery rows
+        } else if s.batteryVisible {
             let pages = PanelRenderer.pages(s.devices).count
             k[.battery] = deviceSignature(s.devices) + "#p\(min(s.batteryPage, max(0, pages - 1)))/\(pages)"
         }
@@ -91,6 +93,31 @@ enum StateBuilder {
 
     /// Network footer values of one reading (nil = all "—"); rates nil (baseline just set) → "—" for the four rates.
     static func net(_ r: NetReading?, lang: Lang) -> NetDisplay { SysFormat.net(r, lang) }
+
+    /// Side column of the network view: the busiest apps of one nettop window (already sorted), formatted.
+    static func netTop(_ list: [ProcTraffic]) -> NetTopDisplay {
+        .rows(list.prefix(NetTopDisplay.maxRows).map {
+            NetTopRow(name: $0.name, down: .text(L10n.speedCompact(bytesPerSecond: $0.rx)), up: .text(L10n.speedCompact(bytesPerSecond: $0.tx)))
+        })
+    }
+
+    /// Everything the busiest-apps column draws.
+    static func netTopKey(_ d: NetTopDisplay) -> String {
+        switch d {
+        case .pending: return "pending"
+        case .failed: return "failed"
+        case .rows(let r): return r.map { "\($0.name)=\(key($0.down))/\(key($0.up))" }.joined(separator: ";")
+        }
+    }
+
+    /// DSP `top="Safari:65.0 kb/1.90 kb;Claude:…"` token source (network view with the side column): the rows on screen.
+    static func dspNetTop(_ s: PanelState) -> String {
+        switch s.netTop {
+        case .pending: return "pending"
+        case .failed: return "F"
+        case .rows(let r): return r.isEmpty ? "none" : netTopKey(s.netTop)
+        }
+    }
 
     /// Everything the battery column draws for a device list.
     static func deviceSignature(_ ds: [DeviceGroup]) -> String {
@@ -296,6 +323,35 @@ enum AppSelfTest {
                && kC == [.chrome, .clock, .sim, .axis, .battery, .cpuSys, .cpuUser, .cpuIdle, .cpuThreads, .cpuProcs],
                "\(names(kN)) / \(names(kC))")
 
+        // network view with the side column: the busiest apps own the column (no battery key); one nettop window dirties
+        // only that region; pending after a reset; a failure shows at once; DSP top tokens
+        let kT = Set(StateBuilder.regionKeys(Snapshot.fixtureState(now: t0, view: .network, lang: .zh, battery: true)).keys)
+        let tp = Store(config: Config(), startedAt: t0)
+        tp.setUI(UISettings(view: .network), lang: .zh, now: at(0)); tp.applySys(sys(seq: 1, t: at(0)), now: at(0))
+        tp.applyBattery([kb(50)], now: at(0.1)); tp.clearDirty()
+        tp.applyProcNet(.value([ProcTraffic(name: "Safari", rx: 652_000, tx: 14_800), ProcTraffic(name: "Claude", rx: 0, tx: 80)]), now: at(1))
+        let d1 = tp.dirty, s1 = tp.panelState(now: at(1)); tp.clearDirty()
+        tp.applyProcNet(.value([ProcTraffic(name: "Safari", rx: 652_000, tx: 14_800), ProcTraffic(name: "Claude", rx: 0, tx: 80)]), now: at(3)); let d2 = tp.dirty
+        tp.applyBattery([kb(49)], now: at(3.1)); let d3 = tp.dirty
+        tp.applyProcNet(.failed(err: "rc=1"), now: at(5)); let sF2 = tp.panelState(now: at(5))
+        tp.applyProcNet(.value((0..<7).map { ProcTraffic(name: "A\($0)", rx: 1, tx: 1) }), now: at(7)); let s7 = tp.panelState(now: at(7))
+        tp.resetProcNet(now: at(8)); let sP = tp.panelState(now: at(8))
+        tp.applyProcNet(Reading<[ProcTraffic]>.value([]), now: at(9)); let s0 = tp.panelState(now: at(9))
+        var rows7 = 0; if case .rows(let r) = s7.netTop { rows7 = r.count }
+        let want1 = NetTopDisplay.rows([NetTopRow(name: "Safari", down: .text("5.22 Mb"), up: .text("118 kb")),
+                                        NetTopRow(name: "Claude", down: .text("0 bit"), up: .text("640 bit"))])
+        let keysOK = kT.contains(Region.netTop) && !kT.contains(Region.battery) && !kN.contains(Region.netTop) && !kC.contains(Region.netTop)
+        let dirtyOK = d1 == Set([Region.netTop]) && d2.isEmpty && d3.isEmpty
+        let rowsOK = s1.netTop == want1 && StateBuilder.dspNetTop(s1) == "Safari=5.22 Mb/118 kb;Claude=0 bit/640 bit" && rows7 == NetTopDisplay.maxRows
+        let statesOK = sF2.netTop == NetTopDisplay.failed && StateBuilder.dspNetTop(sF2) == "F" && sP.netTop == NetTopDisplay.pending
+            && StateBuilder.dspNetTop(sP) == "pending" && StateBuilder.dspNetTop(s0) == "none"
+        let wantedOK = AppController.procNetWanted(view: .network, sideColumn: true, visible: true)
+            && !AppController.procNetWanted(view: .network, sideColumn: false, visible: true)
+            && !AppController.procNetWanted(view: .network, sideColumn: true, visible: false)
+            && !AppController.procNetWanted(view: .cpu, sideColumn: true, visible: true)
+        expect("store.net_top", keysOK && dirtyOK && rowsOK && statesOK && wantedOK,
+               "\(names(d1)) | \(StateBuilder.dspNetTop(s1)) | rows7=\(rows7)")
+
         // DSP tokens (spec §9.1): non-memory views mem_seq=- + sys_seq=; view / lang / batv tokens
         let dm = PanelView.dspBody(Snapshot.fixtureState(now: t0), seq: 3, memSeq: 41, sysSeq: 7, regions: ["used"], drawUs: 120)
         let dc = PanelView.dspBody(Snapshot.fixtureState(now: t0, view: .cpu, lang: .en, battery: false), seq: 4, memSeq: 41, sysSeq: 7,
@@ -303,6 +359,10 @@ enum AppSelfTest {
         expect("dsp.view_tokens", dm.hasPrefix("seq=3 mem_seq=41 clock=") && dm.contains(" view=mem lang=zh batv=1 sim=0") && !dm.contains("sys_seq")
                && dc.hasPrefix("seq=4 mem_seq=- sys_seq=7 clock=") && dc.contains("regions=cpuSys,graph") && dc.contains("bat=\"hidden\"")
                && dc.contains(" view=cpu lang=en batv=0 sim=0") && !dc.contains("blank=1"), "\(dm) || \(dc)")
+        let dn = PanelView.dspBody(Snapshot.fixtureState(now: t0, view: .network, lang: .zh, battery: true), seq: 5, memSeq: 41, sysSeq: 7,
+                                   regions: ["netTop"], drawUs: 80)
+        expect("dsp.net_top", dn.contains("bat=\"hidden\"") && dn.hasSuffix(" view=net lang=zh batv=1 sim=0 top=\"Safari=5.22 Mb/118 kb;Microsoft Teams=570 kb/37.1 kb;"
+               + "微信=79.0 kb/41.7 kb;Claude=12.4 kb/9.80 kb;mDNSResponder=640 bit/360 bit\"") && !dm.contains(" top=") && !dc.contains(" top="), dn)
 
         // memory sampling rate: the memory view on a visible window → --mem-hz, otherwise ≤ 1 Hz
         expect("ui.mem_hz_target", AppController.memHzTarget(view: .memory, visible: true, configured: 4) == 4

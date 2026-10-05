@@ -18,7 +18,7 @@ v2 加了另外兩個畫面：**CPU**（AM CPU 分頁頁尾：CPU 系統／使�
 
 ![網路畫面](docs/images/panel-network.png)
 
-> Wokyis 實機截圖（1280×720 原生像素）：一般狀態（面板剛啟動，壓力圖左軸「收集中 N/10 分鐘」）、AirPods 沒連到 Mac 時的「附近」灰字、用模擬注入產生的「嚴重」紅色壓力（模擬中會有洋紅外框與徽章）。v2 的 CPU 與網路畫面是面板在執行中以 SIGUSR1（`scripts/snapshot.sh`）輸出的 1280×720 snapshot：同一個 renderer、當下的實際資料（面板剛啟動約 1 分鐘，所以圖只有右端一小段），不是 Wokyis 實機截圖。
+> Wokyis 實機截圖（1280×720 原生像素）：一般狀態（面板剛啟動，壓力圖左軸「收集中 N/10 分鐘」）、AirPods 沒連到 Mac 時的「附近」灰字、用模擬注入產生的「嚴重」紅色壓力（模擬中會有洋紅外框與徽章）。v2 的 CPU 畫面是面板在執行中以 SIGUSR1（`scripts/snapshot.sh`）輸出的 1280×720 snapshot：同一個 renderer、當下的實際資料（面板剛啟動約 1 分鐘，所以圖只有右端一小段），不是 Wokyis 實機截圖。網路畫面是 `WokyisPanel --snapshot --view network` 以固定的示範資料畫出的（同一個 renderer；側邊欄的程式名稱與數字是示範值，不是實際流量）。
 
 目錄：[說明與畫面](#1-一句話說明與畫面)｜[需求與限制](#2-需求與限制)｜[建置](#3-建置)｜[下載安裝](#31-下載安裝github-release)｜[啟動與停止](#4-啟動停止狀態與-log)｜[與其他全螢幕 App 切換](#5-與其他全螢幕-app-切換)｜[狀態列與快捷鍵](#51-狀態列圖示與快捷鍵)｜[技術選型](#6-技術選型理由)｜[畫面說明](#7-畫面說明)｜[資料來源與公式](#8-每個欄位的資料來源與換算公式)｜[更新頻率與 log](#9-更新頻率與-log-格式)｜[模擬與容錯](#10-模擬與容錯)｜[已知限制](#11-已知限制)
 
@@ -291,6 +291,7 @@ v2 在 Wokyis 上的實測（2026-10-02，全螢幕可見，`tools/c7_measure.sh
 | 記憶體、`--log-level sample` | 1 | 1.58% | 1.71% | 1.77% |
 | CPU | 2 | 0.91%、1.08% | 1.09% | 1.43% |
 | 網路 | 2 | 0.74%、1.26% | 1.27% | 1.55% |
+| 網路、電量欄（側邊欄顯示程式排行，8.8；2026-10-05） | 1 | 1.47% | 1.51% | 1.52% |
 
 footprint 最高約 87 MB、RSS 最高約 118 MB。記憶體數值原本預設每秒重畫 4 次，記憶體畫面（英文、無電量欄）量到 2.09%（超過 2%）與 1.80%，所以依事先訂的規則改成每秒 2 次。記憶體／英文／無電量欄的第三輪（1.49%）是改預設之前用 `--mem-display-hz 2` 量的；CPU、網路畫面各有一輪也是在改預設之前量的，這兩個畫面不畫記憶體數值，不受這項改動影響。
 
@@ -315,7 +316,7 @@ footprint 最高約 87 MB、RSS 最高約 118 MB。記憶體數值原本預設�
 v2 的其他版面（三個畫面都共用右側電量欄、右下時鐘與外框）：
 
 - **CPU 畫面**：上方兩個大字「CPU 系統」「CPU 使用者」（標籤右側各有一個系列色塊）；中間是 10 分鐘 CPU 負載圖（系統在下、紅色；使用者疊在上方、青色；縱軸上限 110%，50% 粗線、100% 細線）；下方一列「CPU 閒置／執行緒／程序」。
-- **網路畫面**：上方兩個大字「下載」「上傳」；中間是 10 分鐘 DATA 圖（下載由中線往上、青色；上傳由中線往下、紅色；兩者共用線性尺度＝可見範圍最大值 × 1.1，下限 1 kB/s）；下方兩列：封包流入量／流入／秒／已接收的資料，封包流出量／流出／秒／已傳送的資料。
+- **網路畫面**：上方兩個大字「下載」「上傳」；中間是 10 分鐘 DATA 圖（下載由中線往上、青色；上傳由中線往下、紅色；兩者共用線性尺度＝可見範圍最大值 × 1.1，下限 1 kB/s）；下方兩列：封包流入量／流入／秒／已接收的資料，封包流出量／流出／秒／已傳送的資料。電量欄顯示時，這個畫面的側邊欄改列**流量最大的前 5 個程式**（不顯示電量）：每列上行是程式名稱（放不下時截斷加「…」），下行左邊是下載、右邊是上傳，單位顏色與上方圖例相同（青＝下載、紅＝上傳）；速率取 3 位有效數字、單位同上方大字（位元），每 2 秒更新一次。剛切到這個畫面時顯示「收集中」，沒有程式在傳輸時顯示「目前沒有 程式在傳輸」，來源失敗時顯示「—」（8.8）。
 - **電量欄關閉**（⌃⌥⌘B 或 `--battery no`）：主欄全寬（x 28–1252），三個畫面的圖都變寬；記憶體壓力區塊與格線欄位右移；CPU 畫面的「CPU 閒置」升為第三個大字；「更新」與時鐘移進格線最後一格。
 - **英文**：標籤用大寫英文（7.2 節）；記憶體壓力區塊位置略為左移，以容納較長的 PRESSURE 標籤。
 - 圖的共同規則：600 s 對應整個圖寬，右端是現在；每分鐘一條細格線、5 分鐘一條粗線；讀取失敗或兩點間隔 ≥ 2.5 s 時留白；模擬中的秒在有效資料段底部畫 7 px 洋紅條（只標該圖自己的來源：CPU 圖只看 `cpu.load`、網路圖只看 `net.if` 的注入；`cpu.tasks` 不在任何圖上）。
@@ -561,6 +562,25 @@ SystemSampler 在自己的佇列（sysQ）每秒對齊牆鐘整秒讀一次，�
 - 網路圖固定顯示 DATA（位元組速率），沒有 AM 的 PACKETS 模式切換。
 - 封包總數在 60 pt 放不下時改十進位縮寫（`1.23 G`）：電量欄顯示時從 10 位數開始，全寬時從 11 位數開始。
 
+### 8.8 網路畫面側邊欄：程式流量排行（`Sources/System/ProcNetSource.swift`，來源 id `net.proc`）
+
+IFMIB 的計數器是「每個網路介面」的總量，分不出是哪個程式的流量，所以排行另用系統內建的 `/usr/bin/nettop`（不需要 sudo）。
+
+| 項目 | 做法 | 理由（macOS 27 實測） |
+|---|---|---|
+| 子程序 | `nettop -P -d -x -n -L 2 -s 2 -J bytes_in,bytes_out`：跑一個 2 秒視窗後結束，印出兩個 CSV 區塊，只取第二個（視窗內的差量） | 兩張單次快照相減不可行：`nettop` 只列「還開著」的連線，連線一關、程式的累計值就變小，在兩張快照之間開了又關的連線完全看不到（6 次 `curl` 共 1.52 MB，快照法看到 0；差量模式看到 1.56 MB） |
+| stdin | 接一條開著、永不寫入的 pipe | 接 `/dev/null` 時 `nettop` 的鍵盤輸入來源會不停被喚醒，整個視窗吃超過一顆核心；接 pipe 時每次約 0.01 s CPU |
+| `-n` | 不反查主機名稱 | 不加時每個樣本要等約 5 s |
+| 等待結束 | `terminationHandler`＋semaphore，不用 `waitUntilExit()` | `waitUntilExit()` 靠呼叫端執行緒的 run loop，在 GCD 工作執行緒上實測第 4 次就不再返回 |
+| 程式名稱 | 由 pid 查執行檔路徑：取路徑中**最外層**的 `.app`（`Slack Helper` → Slack）；不在任何 `.app` 內的 XPC 服務（`com.apple.WebKit.Networking`）取「負責它的 App」（Safari）；其餘取執行檔名稱並去掉 `com.apple.` | `nettop` 把名稱截成 15 個字元（`com.apple.WebKi`）；同一個 App 的多個 helper 合併成一列 |
+| 啟動條件 | 只在「網路畫面＋電量欄顯示＋視窗可見」時執行（`UI event=net_proc on=1\|0 why=`），離開就終止子程序 | 其他畫面零成本 |
+| 失敗 | 啟動失敗、結束碼非 0、沒有第二個區塊、超過 6 s（watchdog）或注入 `fail net.proc` → 側邊欄「—」，`ERR src=net.proc`，2 秒後重試，恢復時 `RECOVER` | 與其他來源相同的三態規則 |
+
+- 「負責它的 App」用 private 符號 `responsibility_get_pid_responsible_for_pid`（`dlsym` 取得，不連結）；取不到時改顯示執行檔名稱（`WebKit.Networking`），不會 crash。
+- 排行顯示的是「剛結束的那個 2 秒視窗」的平均，上方大字是最近 1 秒：流量突然起落時兩邊會差 2–4 秒（尖峰過後，排行還會多顯示一個視窗）。
+- 排行只依當下這個 2 秒視窗的下載＋上傳排序，沒有平滑；視窗結束前就退出的程式（例如 `curl`）查不到路徑，顯示 `nettop` 給的名稱。
+- 排行的數字是各程式 socket 層的位元組，上方大字是介面層的位元組（含標頭與非 socket 流量），兩者相加不會完全相等。
+
 ---
 
 ## 9. 更新頻率與 log 格式
@@ -573,6 +593,7 @@ SystemSampler 在自己的佇列（sysQ）每秒對齊牆鐘整秒讀一次，�
 | 記憶體取樣（v2） | 記憶體畫面且視窗可見：`--mem-hz`（4 Hz）；CPU／網路畫面、視窗被遮住或沒有視窗：1 Hz（`UI event=mem_hz from= to= why=view\|occluded`）。壓力歷史每秒仍有一點 |
 | 記憶體數值重畫（v2） | 最多 `--mem-display-hz`（預設 2）次/秒：只顯示每秒 .000 與 .500 那兩個樣本 |
 | CPU／網路取樣（v2 SystemSampler） | 1 Hz，對齊牆鐘整秒；不管目前畫面 |
+| 程式流量排行（`net.proc`） | 每 2 秒一個 `nettop` 視窗；只在網路畫面、電量欄顯示且視窗可見時（8.8） |
 | CPU／網路畫面重畫 | 1 次/秒（數值、圖、軸、時鐘同一次） |
 | HID／IOPS 電量 | 每 15 s＋系統通知 |
 | `system_profiler` | 每 20 s＋通知觸發加跑 |
@@ -592,7 +613,8 @@ App 以 `ProcessInfo.beginActivity(.userInitiatedAllowingIdleSystemSleep + .late
 | `CPU`（v2，只寫檔） | 每秒：`seq= dur_us= sys=4.99 user=16.65 idle=78.36 nice=0.00 cores=12 threads=4783 procs=795 sim=0 fail=- skip=-`；失敗欄位寫 `-`，`fail=cpu.load,cpu.tasks`；summary 等級每 `--summary-seconds` 一行 |
 | `NET`（v2，只寫檔） | 每秒：`seq= dur_us= ifaces=14 pkt_in= pkt_out= pkt_in_s=612 pkt_out_s=148 rx=<bytes> tx=<bytes> rx_bps=739000 tx_bps=19574 sim=0 fail=- skip=-`（`rx_bps`／`tx_bps` 是**位元組**/秒；未知寫 `-`） |
 | `UI`（v2） | `event=view\|battery\|lang from= to= via=menu\|hotkey\|start`（語言另加 `resolved=`）、`event=mem_hz from= to= why=`、`event=hotkey_register key= status=`、`event=dedup action= via= first_via=`、`event=quit via=` |
-| `DSP` | 每次繪圖結束：`seq= mem_seq= clock= regions= bat="kb:100 tp:85 L:100 R:97 C:48c" page=n/N stale= [blank=1] draw_us= view=mem\|cpu\|net lang=zh\|en batv=1\|0 sim=`（CPU／網路畫面 `mem_seq=-` 並加 `sys_seq=`）；bat 代碼 `F` 失敗、`U` 無資料、`S` stale、`off` 離線、`none` 無裝置、`c` 充電、`kb[TAG]:` 有 owner tag、`pods~`／`pods[TAG]~` 其後三格為「附近」（8.5.1） |
+| `DSP` | 每次繪圖結束：`seq= mem_seq= clock= regions= bat="kb:100 tp:85 L:100 R:97 C:48c" page=n/N stale= [blank=1] draw_us= view=mem\|cpu\|net lang=zh\|en batv=1\|0 sim=`（CPU／網路畫面 `mem_seq=-` 並加 `sys_seq=`）；bat 代碼 `F` 失敗、`U` 無資料、`S` stale、`off` 離線、`none` 無裝置、`c` 充電、`kb[TAG]:` 有 owner tag、`pods~`／`pods[TAG]~` 其後三格為「附近」（8.5.1）。網路畫面的側邊欄顯示程式排行，所以 `bat="hidden"`，並在行尾加 `top="Safari=5.22 Mb/118 kb;…"`（畫面上的各列：名稱＝下載／上傳；`pending` 收集中、`none` 沒有流量、`F` 失敗） |
+| `NETP`（只寫檔，`--log-level sample`） | 每個 2 秒視窗：`procs=<nettop 列數> active=<有流量的程式數> top="Safari":65000/1900,…`（前 5 名，位元組／秒，下載／上傳） |
 | `BAT` | 每列每 15 s 一行，內容變化時另寫：HID `dev= kind= name= pct= chg= conn=1 src=hid flags= sp=connected\|absent\|stale`；AirPods `dev=0x<PID>:<名稱> kind=airpods addr= L= R= C= chgL= chgR= chgC= conn=1 src=iops\|sp\|none sp_L= sp_R= sp_C=`；「附近」`… conn=0 nearby=1 src=iops\|ble\|none ev=iops\|ble fresh_age_s=`（8.5.1）；離線列 `conn=0 offline_since=` |
 | `SP` | 成功 `rc=0 ms= connected= not_connected= trigger=timer\|notify`；失敗 `rc=<rc\|-> ms= err= last_ok_age_s= trigger=` |
 | `DEV` | 狀態轉換 `dev= kind= from= to= why=`；狀態 connected／nearby／offline／failed／stale／removed／none，原因 hid、hid_failed、terminated、sp、sp_stale、grace_removed、iops_change、ble_companion、nearby_stale |
@@ -625,7 +647,7 @@ scripts/sim.sh clear                               # 寫入 {}
 scripts/sim.sh status                              # 印出 control.json 與面板最後一行 CTL
 ```
 
-來源 id：`mem.physical`、`mem.vm`（所有 `vm.*` 純量 MIB，不含 `vm.swapusage`）、`mem.swap`、`mem.level`、`mem.pressure`、`mem.audit`、`bat.hid`、`bat.iops`、`bat.sp`、`mem.mib:<名稱>`，以及 v2 的 `cpu.load`（CPU 系統／使用者／閒置）、`cpu.tasks`（執行緒／程序）、`net.if`（所有網路欄位）。v2 徽章依目前畫面排序（目前畫面自己的來源在前），放不下時從最後整項省略並加「另 N 項」。`--for` 預設 600 s、上限 900 s。面板在跑時，`sim.sh` 最多等 3 s 讀面板的 `CTL` 行並印出；面板拒絕（`CTL invalid`）時回傳 1。
+來源 id：`mem.physical`、`mem.vm`（所有 `vm.*` 純量 MIB，不含 `vm.swapusage`）、`mem.swap`、`mem.level`、`mem.pressure`、`mem.audit`、`bat.hid`、`bat.iops`、`bat.sp`、`mem.mib:<名稱>`，以及 v2 的 `cpu.load`（CPU 系統／使用者／閒置）、`cpu.tasks`（執行緒／程序）、`net.if`（所有網路欄位）、`net.proc`（網路畫面側邊欄的程式排行，只支援 `fail`）。v2 徽章依目前畫面排序（目前畫面自己的來源在前），放不下時從最後整項省略並加「另 N 項」。`--for` 預設 600 s、上限 900 s。面板在跑時，`sim.sh` 最多等 3 s 讀面板的 `CTL` 行並印出；面板拒絕（`CTL invalid`）時回傳 1。
 
 `control.json` 格式：
 

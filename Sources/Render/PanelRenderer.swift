@@ -92,6 +92,7 @@ enum Region: String, CaseIterable {
     // v2 (appended: the memory draw order above is unchanged)
     case cpuSys, cpuUser, cpuIdle, cpuThreads, cpuProcs
     case netDown, netUp, netPktIn, netPktOut, netPktInS, netPktOutS, netRecv, netSent
+    case netTop   // network view: busiest apps, in the side column's rect (the battery rows are not drawn there)
     /// nil = shared by every view (chrome, graph, axis, battery, clock, sim)
     var view: ViewKind? {
         switch self {
@@ -144,7 +145,7 @@ enum Layout {
 struct Cell { let x: CGFloat; let labelBase: CGFloat; let valueBase: CGFloat; let room: CGFloat; let hero: Bool; let row: Int; let col: Int }
 
 struct Geometry {
-    let view: ViewKind, battery: Bool, lang: Lang
+    let view: ViewKind, battery: Bool, lang: Lang   // battery = the side column is shown (network view: busiest apps)
     var LR: CGFloat                    // right edge of the main column: 828 with the battery column, 1252 without
     var graph: CGRect
     var axisBase: CGFloat
@@ -227,7 +228,7 @@ extension Layout {
         let simTop = max(660, rowY.last!.1)
         g.regions[.sim] = CGRect(x: 20, y: simTop, width: wide, height: 712 - simTop)
         if battery {
-            g.regions[.battery] = Layout.region[.battery]!
+            g.regions[v == .network ? .netTop : .battery] = Layout.region[.battery]!
             g.regions[.clock] = Layout.region[.clock]!
         }
         if v == .memory && battery && lang == .zh { g.regions = Layout.region }   // the frozen v1 table, verbatim
@@ -473,6 +474,7 @@ final class PanelRenderer {
         case .sim: if let b = s.simulationBadge { drawBadge(ctx, b) }
         case .cpuSys, .cpuUser, .cpuIdle, .cpuThreads, .cpuProcs: drawCPUCell(ctx, s, r)
         case .netDown, .netUp, .netPktIn, .netPktOut, .netPktInS, .netPktOutS, .netRecv, .netSent: drawNetCell(ctx, s, r)
+        case .netTop: drawNetTop(ctx, s)
         }
     }
 
@@ -486,6 +488,8 @@ final class PanelRenderer {
     }
 
     func logCell(_ c: Cell, _ labels: [String], _ value: String) { cellLog.append((c.row, c.col, labels, value)) }
+    /// a value outside the cell table (side-column rows 10…): only the ≥ 30 px value gap of its row is checked
+    func logValue(row: Int, col: Int, _ value: String) { cellLog.append((row, col, [], value)) }
     /// extension files add element boxes through this (the arrays stay private(set))
     func addBox(_ id: String, _ r: CGRect) { boxes.append((id, r)) }
 

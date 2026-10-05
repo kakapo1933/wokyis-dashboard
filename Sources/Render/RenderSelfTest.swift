@@ -14,6 +14,7 @@ enum RenderSelfTest {
         var out: [SelfTestCase] = []
         out += l10nCases()
         out += fmtCases()
+        out += netTopCases()
         out += ringCases()
         out += digitGuardCases()
         out += comboCases()
@@ -75,6 +76,16 @@ enum RenderSelfTest {
         return out
     }
 
+    // MARK: network side column — a name wider than the column is cut with "…" and fits; a short one is untouched
+
+    static func netTopCases() -> [SelfTestCase] {
+        let r = PanelRenderer(), room = Layout.RR - Layout.RL
+        let long = r.fitName("Google Chrome Helper (Renderer) Extra", maxWidth: room), cjk = r.fitName("網路流量監控工具超長名稱測試用", maxWidth: room)
+        let ok = long.hasSuffix("…") && long.count > 8 && r.width(r.labelPieces(long)) <= room
+            && cjk.hasSuffix("…") && r.width(r.labelPieces(cjk)) <= room && r.fitName("Safari", maxWidth: room) == "Safari"
+        return [SelfTestCase("render.net_top.fit_name", ok, "\(long) | \(cjk)")]
+    }
+
     // MARK: number formats (design/fmt.txt boundary values)
 
     static func fmtCases() -> [SelfTestCase] {
@@ -88,6 +99,12 @@ enum RenderSelfTest {
                                 (L10n.speed(bytesPerSecond: 739_000, .en), "5.91 Mb/s"), (L10n.speed(bytesPerSecond: 19_574, .zh), "156.59 kb/秒"),
                                 (L10n.speed(bytesPerSecond: 125_000_000, .en), "1.00 Gb/s"), (L10n.speed(bytesPerSecond: 3e12, .zh), "24.00 Tb/秒"),
                                 (L10n.speed(bytesPerSecond: -5, .en), "0.00 bit/s")]),
+            check("fmt.speed_compact", [(L10n.speedCompact(bytesPerSecond: 0), "0 bit"), (L10n.speedCompact(bytesPerSecond: 80), "640 bit"),
+                                        (L10n.speedCompact(bytesPerSecond: 124.9), "999 bit"), (L10n.speedCompact(bytesPerSecond: 124.95), "1.00 kb"),
+                                        (L10n.speedCompact(bytesPerSecond: 5_800), "46.4 kb"), (L10n.speedCompact(bytesPerSecond: 1_249.4), "10.0 kb"),
+                                        (L10n.speedCompact(bytesPerSecond: 16_875), "135 kb"), (L10n.speedCompact(bytesPerSecond: 124_950), "1.00 Mb"),
+                                        (L10n.speedCompact(bytesPerSecond: 739_000), "5.91 Mb"), (L10n.speedCompact(bytesPerSecond: 12_495_000), "100 Mb"),
+                                        (L10n.speedCompact(bytesPerSecond: 3e12), "24.0 Tb"), (L10n.speedCompact(bytesPerSecond: -5), "0 bit")]),
             check("fmt.pct", [(L10n.fmt2(4.994) + "%", "4.99%"), (L10n.fmt2(4.995) + "%", "5.00%"), (L10n.fmt2(16.649) + "%", "16.65%"),
                               (L10n.fmt2(99.995) + "%", "100.00%"), (L10n.fmt2(100) + "%", "100.00%"), (L10n.fmt2(1234.5), "1,234.50")]),
             check("fmt.int", [(L10n.int(4_783), "4,783"), (L10n.int(795), "795"), (L10n.int(0), "0"), (L10n.int(1_234_567_890), "1,234,567,890")]),
@@ -173,27 +190,31 @@ enum RenderSelfTest {
             s.cpu = cpu; s.cpuHistory = cr.view(); s.net = net; s.netHistory = nr.view(); s.sysCoverage = cov
             return s
         }
-        var out: [(String, PanelState)] = [("fixture", make(base, cpu: cpu, net: net, cr: cr, nr: nr))]
+        // side column of the network view: fixture / sim = five rows (a cut name, a CJK name), placeholder = pending
+        // (the default), failed = "—", stale = nothing transferring
+        let top = StateBuilder.netTop(Snapshot.netTopFixture)
+        var fx = base; fx.netTop = top
+        var out: [(String, PanelState)] = [("fixture", make(fx, cpu: cpu, net: net, cr: cr, nr: nr))]
         // placeholder: nothing sampled yet
         let blankMem = MemoryDisplay(physical: .failed, used: .failed, cached: .failed, swap: .failed, app: .failed, wired: .failed,
                                      compressed: .failed, pressurePercent: nil, pressureLevel: nil)
         out.append(("placeholder", make(PanelState(memory: blankMem, history: [], now: now, historyCoverage: 0, devices: [], clock: "--:--:--"),
                                         cpu: .blank, net: .blank, cr: SecondRing<CPUPoint>(), nr: SecondRing<NetPoint>(), cov: 0)))
         // failed: every value "—", last 40 s of history failed, failed / stale / offline battery rows
-        var f = base; f.memory = blankMem
+        var f = base; f.memory = blankMem; f.netTop = .failed
         for k in (f.history.count - 40)..<f.history.count { f.history[k].percent = nil; f.history[k].level = nil }
         f.devices = [DeviceGroup(kind: .keyboard, name: "x", ownerTag: nil, connected: false, cells: [BatteryCell(label: "鍵盤", state: .ok(100, charging: false))]),
                      DeviceGroup(kind: .trackpad, name: "x", ownerTag: nil, connected: true, cells: [BatteryCell(label: "軌跡板", state: .failed)]),
                      DeviceGroup(kind: .mouse, name: "x", ownerTag: nil, connected: true, cells: [BatteryCell(label: "滑鼠", state: .stale)])]
         out.append(("failed", make(f, cpu: .blank, net: .blank, cr: cpuRing(span: 900, gapLast: 40, now: now), nr: netRing(span: 900, gapLast: 40, now: now))))
         // stale: 3 minutes collected, stale chip, no devices
-        var st = base; st.sampleStale = true; st.devices = []; st.historyCoverage = 190
+        var st = base; st.sampleStale = true; st.devices = []; st.historyCoverage = 190; st.netTop = .rows([])
         st.history = st.history.filter { now - $0.t <= 190 }
         out.append(("stale", make(st, cpu: cpu, net: net, cr: cpuRing(span: 190, now: now), nr: netRing(span: 190, now: now), cov: 190)))
         // sim: collapsed badge (whole items) + 120 s simulated of which the last 40 s failed
         let m = PanelRenderer()
         let maxW = (c.battery ? Layout.LR : 1252) - Layout.L
-        var sm = base
+        var sm = base; sm.netTop = top
         sm.simulationBadge = L10n.badge(fail: ["mem.vm", "bat.hid", "cpu.load", "net.if"], hang: ["bat.sp"], garbage: ["cpu.tasks"], pressure: (.critical, 92),
                                         c.lang, view: c.view, fits: { m.width(m.labelPieces($0, color: Theme.sim)) <= maxW })
         sm.memory.pressurePercent = 92; sm.memory.pressureLevel = .critical; sm.memory.pressureSimulated = true

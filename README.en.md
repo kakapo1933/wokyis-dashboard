@@ -142,6 +142,13 @@ abbreviated:
 The battery column always uses KBD / TPAD / MOUSE / DEVICE and LEFT / RIGHT / CASE (BATT for single-battery
 headphones). The clock label is `AS OF`; the simulation badge starts with `SIM:`.
 
+**Network view, side column = busiest apps**: while the battery column is shown, the network view uses it to list the
+five apps moving the most data right now (no battery rows on this view): the app name, then download on the left and
+upload on the right, with the unit in the series color (cyan download, red upload), 3 significant digits, refreshed
+every 2 s. It shows `COLLECTING` right after switching to the view, `NO APP IS TRANSFERRING` when idle, and `—` when
+the source fails. Helpers are counted under their app (Slack Helper → SLACK, Safari's WebKit networking → SAFARI). It
+lists apps, not remote hosts. How it is measured: [README.md section 8.8](README.md).
+
 **Inverted number = LOW (≤ 20 %)**: in English a low battery level is drawn as a dark number on a white rounded box
 (there is no room for a LOW chip); the thicker battery bar is the second cue. The Chinese interface keeps the white 「低」
 chip.
@@ -202,7 +209,7 @@ carries `sim=1`. Source ids and rules: [README.md section 10](README.md#10-模�
   the windows differ. `amcompare` automates the memory view (Traditional Chinese, battery column shown) only.
 - CPU use stays close to, but under, the limit of 2 % of one core averaged over 5 minutes (the "% CPU" figure in
   Activity Monitor; 2 % is about 1.2 s of work per minute). The memory view uses the most, about 1.3–1.7 % (busiest
-  5 minutes 1.71 %); the CPU and network views about 0.7–1.3 %, since they update once a second. A single minute can go
+  5 minutes 1.71 %); the CPU and network views about 0.7–1.3 %, since they update once a second (about 1.5 % on the network view while its side column lists the busiest apps). A single minute can go
   above 2 %. Memory numbers redraw twice a second by default (memory is still read 4 times a second for the graph); at
   4 times a second the memory view once measured 2.09 %. To use even less, quit the panel and run
   `open -a WokyisPanel --args --mem-display-hz 1` (this launch only). For the whole Mac mini this is under 0.2 %.

@@ -147,8 +147,14 @@ enum Snapshot {
         s.net = StateBuilder.net(NetReading(pktIn: 27_833_717, pktOut: 68_441_461, bytesIn: 22_758_680_252, bytesOut: 93_632_064_060,
                                            pktInRate: 612, pktOutRate: 148, rxRate: 739_000, txRate: 19_574, ifaces: 14), lang: lang)
         s.cpuHistory = cpuR.view(); s.netHistory = netR.view(); s.sysCoverage = 900   // a view holds its ring
+        s.netTop = StateBuilder.netTop(netTopFixture)
         return s
     }
+
+    /// Five apps (bytes/s): a long name that is cut, a CJK name, and rates from Mb down to bits.
+    static let netTopFixture = [ProcTraffic(name: "Safari", rx: 652_000, tx: 14_800), ProcTraffic(name: "Microsoft Teams", rx: 71_300, tx: 4_640),
+                                ProcTraffic(name: "微信", rx: 9_870, tx: 5_210), ProcTraffic(name: "Claude", rx: 1_550, tx: 1_225),
+                                ProcTraffic(name: "mDNSResponder", rx: 80, tx: 45)]
 
     /// The state rendered by `--snapshot` (no window, no sampling threads, no UserDefaults).
     static func offscreenState(config: Config, now: Date = Date()) -> PanelState {

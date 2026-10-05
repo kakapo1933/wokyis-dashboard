@@ -102,8 +102,12 @@ final class PanelView: NSView {
         let blank = StateBuilder.isBlank(s)
         let seqs = s.view == .memory ? "mem_seq=\(memSeq.map { String($0) } ?? "-")"
                                      : "mem_seq=- sys_seq=\(sysSeq.map { String($0) } ?? "-")"
+        // network view: the side column shows the busiest apps, so the battery rows are "hidden" there and a trailing
+        // top="…" token lists the rows on screen (appended last: the positions of the older tokens do not move)
+        let apps = s.batteryVisible && s.view == .network
         return "seq=\(seq) \(seqs) clock=\(s.clock) regions=\(regions.joined(separator: ",")) "
-            + "bat=\(EventLog.q(s.batteryVisible ? StateBuilder.dspBattery(s) : "hidden")) page=\(min(s.batteryPage, pages - 1) + 1)/\(pages) "
+            + "bat=\(EventLog.q(s.batteryVisible && !apps ? StateBuilder.dspBattery(s) : "hidden")) page=\(min(s.batteryPage, pages - 1) + 1)/\(pages) "
             + "stale=\(s.sampleStale ? 1 : 0)\(blank ? " blank=1" : "") draw_us=\(drawUs) \(StateBuilder.dspTokens(s)) sim=\(s.simulationBadge == nil ? 0 : 1)"
+            + (apps ? " top=\(EventLog.q(StateBuilder.dspNetTop(s)))" : "")
     }
 }

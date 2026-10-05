@@ -172,6 +172,56 @@ extension PanelRenderer {
         }
     }
 
+    // MARK: network side column — busiest apps (who this Mac is exchanging data with right now)
+
+    static let topNameBase: CGFloat = 56      // first row's name baseline = the hero label baseline (下載 / 上傳)
+    static let topValueDrop: CGFloat = 60     // name baseline → its values' baseline (the grid's label → value distance)
+    static let topPitch: CGFloat = 126        // row to row: 5 rows end at y 620, above the clock row
+
+    /// "MICROSOFT TEAMS" → "MICROSOFT TE…" until the name fits `maxWidth` (labelPieces upper-cases Latin runs).
+    func fitName(_ name: String, maxWidth: CGFloat) -> String {
+        if width(labelPieces(name)) <= maxWidth { return name }
+        var t = name
+        while t.count > 1 {
+            t.removeLast()
+            let cut = t.trimmingCharacters(in: .whitespaces) + "…"
+            if width(labelPieces(cut)) <= maxWidth { return cut }
+        }
+        return t
+    }
+
+    /// One rate of a row: the grid's value style with the unit in the series colour (cyan = download, red = upload — the
+    /// hero swatches' colours; a swatch per value would not leave two values 30 px apart in 386 px).
+    func ratePieces(_ v: Shown, series: CGColor) -> [Piece] {
+        var p = valuePieces(v, size: Size.secondary, minPx: 40)
+        for i in p.indices where p[i].cls == "unit" { p[i].color = series }
+        return p
+    }
+
+    /// At most NetTopDisplay.maxRows rows, busiest first: name (label style) above download (left) and upload (right).
+    func drawNetTop(_ ctx: CGContext, _ s: PanelState) {
+        let xl = Layout.RL, xr = Layout.RR
+        switch s.netTop {
+        case .pending:
+            text(ctx, labelPieces(L10n.t(.netTopWait, lang)), x: xl, baseline: 92, id: "label.top.wait")
+        case .failed:
+            text(ctx, [Piece(text: "—", font: Fonts.num(Size.main, .semibold), color: Theme.value, cls: "symbol")], x: xl, baseline: 110, id: "value.top.failed")
+        case .rows(let rows):
+            if rows.isEmpty {
+                text(ctx, labelPieces(L10n.t(.netTopIdle1, lang)), x: xl, baseline: 92, id: "label.top.idle1")
+                text(ctx, labelPieces(L10n.t(.netTopIdle2, lang)), x: xl, baseline: 146, id: "label.top.idle2")
+                return
+            }
+            for (i, r) in rows.prefix(NetTopDisplay.maxRows).enumerated() {
+                let nameBase = Self.topNameBase + CGFloat(i) * Self.topPitch, valueBase = nameBase + Self.topValueDrop
+                text(ctx, labelPieces(fitName(r.name, maxWidth: xr - xl)), x: xl, baseline: nameBase, id: "label.top\(i)")
+                text(ctx, ratePieces(r.down, series: Theme.seriesCyan), x: xl, baseline: valueBase, id: "value.top\(i).down")
+                text(ctx, ratePieces(r.up, series: Theme.seriesRed), x: xr, baseline: valueBase, align: .right, id: "value.top\(i).up")
+                logValue(row: 10 + i, col: 0, "value.top\(i).down"); logValue(row: 10 + i, col: 1, "value.top\(i).up")
+            }
+        }
+    }
+
     /// DATA graph (AM SMNetworkGraphController, DATA mode): received on top (cyan, up from the mid line), sent below
     /// (red, inverted, down from the mid line); one shared linear scale = 1.1 × the largest visible value of either
     /// series (floor 1 kB/s); fills α 0.3, 2 px outline, same step rects as the CPU graph.

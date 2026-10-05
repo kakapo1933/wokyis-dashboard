@@ -15,6 +15,8 @@ enum L10n {
         case cpuSystem, cpuUser, cpuIdle, cpuThreads, cpuProcesses
         // network view (AM Network tab footer)
         case netDownload, netUpload, netPacketsIn, netPacketsOut, netPacketsInRate, netPacketsOutRate, netReceived, netSent
+        // network view, side column (busiest apps)
+        case netTopWait, netTopIdle1, netTopIdle2
         // shared chrome
         case axisAgo, axisCollecting, axisNow, clockLabel, stale
         // battery column
@@ -56,6 +58,9 @@ enum L10n {
         .netPacketsOutRate: ("封包流出量／秒", "PACKETS OUT/SEC", "OUT/SEC", "流出／秒"),
         .netReceived: ("已接收的資料", "DATA RECEIVED", "RECEIVED", nil),
         .netSent: ("已傳送的資料", "DATA SENT", "SENT", nil),
+        .netTopWait: ("收集中", "COLLECTING", nil, nil),
+        .netTopIdle1: ("目前沒有", "NO APP IS", nil, nil),
+        .netTopIdle2: ("程式在傳輸", "TRANSFERRING", nil, nil),
         .axisAgo: ("十分鐘前", "10 MIN AGO", nil, nil),
         .axisCollecting: ("收集中 %d/10 分鐘", "COLLECTING %d/10 MIN", nil, nil),
         .axisNow: ("現在", "NOW", nil, nil),
@@ -130,6 +135,7 @@ enum L10n {
             "mem.level": ("壓力值", "PRESSURE VALUE"), "mem.pressure": ("壓力等級", "PRESSURE LEVEL"), "mem.audit": ("稽核", "AUDIT"),
             "bat.hid": ("HID", "HID"), "bat.iops": ("AIRPODS 電量", "AIRPODS BATTERY"), "bat.sp": ("藍牙連線", "BLUETOOTH LINK"),
             "cpu.load": ("CPU 負載", "CPU LOAD"), "cpu.tasks": ("執行緒與程序", "TASKS"), "net.if": ("網路計數", "NET COUNTERS"),
+            "net.proc": ("程式流量", "APP TRAFFIC"),
         ]
         if let n = names[id] { return lang == .zh ? n.0 : n.1 }
         if id.hasPrefix("mem.mib:") { return "MIB " + id.dropFirst("mem.mib:".count).uppercased() }
@@ -190,6 +196,25 @@ enum L10n {
         while i < units.count - 1 && (v * 100).rounded(.toNearestOrAwayFromZero) / 100 >= 1000 { v /= 1000; i += 1 }
         let num = fmt2(v)
         return "\(num) \(units[i])" + (lang == .zh ? "/秒" : "/s")
+    }
+
+    /// Side-column rate (network view, busiest apps): the same bit units as `speed`, 3 significant digits, no "/s" —
+    /// two of them share a 386 px row ("46.4 kb", "135 kb", "1.25 Mb", "640 bit"). Half away from zero; a value that
+    /// rounds to 1000 is promoted to the next unit (999.6 kb → "1.00 Mb"). Language independent.
+    static func speedCompact(bytesPerSecond b: Double) -> String {
+        var v = max(0, b) * 8
+        let units = ["bit", "kb", "Mb", "Gb", "Tb", "Pb"]
+        func rounded(_ x: Double) -> (v: Double, digits: Int) {
+            for d in [2, 1] {
+                let m = pow(10, Double(d)), r = (x * m).rounded(.toNearestOrAwayFromZero) / m
+                if r < (d == 2 ? 10 : 100) { return (r, d) }
+            }
+            return (x.rounded(.toNearestOrAwayFromZero), 0)
+        }
+        var i = 0
+        while i < units.count - 1 && rounded(v).v >= 1000 { v /= 1000; i += 1 }
+        let r = rounded(v)
+        return String(format: "%.\(i == 0 ? 0 : r.digits)f", i == 0 ? v.rounded(.toNearestOrAwayFromZero) : r.v) + " " + units[i]
     }
 
     /// AM paddedPercent / fraction formatter: decimal, 2 fraction digits, half-up, grouping ",". Fixed en_US_POSIX symbols

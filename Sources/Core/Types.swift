@@ -150,6 +150,13 @@ struct NetReading: Sendable, Equatable {
     let ifaces: Int
 }
 
+/// One app's traffic over the last nettop window (bytes/s), helpers summed under the app's name. Produced by
+/// ProcNetMonitor (busiest first, idle apps dropped), consumed on main by Store.applyProcNet.
+struct ProcTraffic: Sendable, Equatable {
+    let name: String
+    let rx: Double, tx: Double
+}
+
 /// One SystemSampler tick (1 Hz, wall-clock aligned), delivered to main.
 struct SysSample: Sendable {
     let seq: UInt64

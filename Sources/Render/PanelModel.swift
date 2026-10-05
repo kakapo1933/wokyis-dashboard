@@ -102,6 +102,7 @@ struct PanelState: Sendable {
     var net: NetDisplay = .blank
     var netHistory: HistoryView<NetPoint> = HistoryView()
     var sysCoverage: Double = 0    // seconds since SystemSampler start, ≤ 900 (CPU / network axis "收集中")
+    var netTop: NetTopDisplay = .pending   // network view, side column: busiest apps (replaces the battery rows there)
 }
 
 // MARK: - v2: views, language, CPU / network display values
@@ -134,6 +135,15 @@ struct NetDisplay: Sendable {
     var received: Shown, sent: Shown
     static let blank = NetDisplay(download: .failed, upload: .failed, packetsIn: .failed, packetsOut: .failed,
                                   packetsInRate: .failed, packetsOutRate: .failed, received: .failed, sent: .failed)
+}
+
+/// One row of the network view's side column: app name + its rates, already formatted (L10n.speedCompact: "46.4 kb").
+struct NetTopRow: Sendable, Equatable { var name: String; var down: Shown; var up: Shown }
+/// pending = no window measured yet (just switched to the view) → 「收集中」; failed = the source failed → bright "—";
+/// rows = busiest first, at most `maxRows` (empty = nothing is transferring).
+enum NetTopDisplay: Sendable, Equatable {
+    case pending, failed, rows([NetTopRow])
+    static let maxRows = 5
 }
 
 /// A point stamped with its wall second (`t` = floor of the sample's wall time).
