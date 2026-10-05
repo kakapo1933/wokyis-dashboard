@@ -105,7 +105,7 @@ The panel adds a status item to the menu bar (SF Symbol `memorychip` / `cpu` / `
 |---|---|---|
 | Memory / CPU / Network (radio) | ⌃⌥⌘M / ⌃⌥⌘P / ⌃⌥⌘N | Show that view |
 | Next View | ⌃⌥⌘V | Memory → CPU → Network → Memory |
-| Show Bluetooth Battery (checkbox) | ⌃⌥⌘B | Show / hide the battery column (hidden = full-width 1224 px main column) |
+| Show Side Column (checkbox) | ⌃⌥⌘B | Show / hide the right-hand column: battery levels on the memory and CPU views, busiest apps on the network view (hidden = full-width 1224 px main column). Called "Show Bluetooth Battery" up to 2.2.1 |
 | Language ▸ System (…) / 繁體中文 / English (radio) | — | "System (…)" shows what it currently resolves to |
 | Language ▸ Switch Language | ⌃⌥⌘L | Toggles between 繁體中文 and English (based on what is shown); never selects System |
 | Quit Wokyis Panel | — | Same graceful exit as `scripts/stop.sh` |

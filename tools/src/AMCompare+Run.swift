@@ -156,7 +156,7 @@ final class Harness {
         let lastD = pl.dsp.last
         cs.append(Check(name: "panel on memory / 繁體中文 / battery shown", ok: lastD?.isOCRLayout ?? false,
                         detail: lastD.map { "last DSP \($0.layoutTokens)" + ($0.isOCRLayout ? "" : " — the panel OCR crops are the v1 memory / zh / battery layout: "
-                            + "set 記憶體 (⌃⌥⌘M), 語言 ▸ 繁體中文, 顯示藍牙電量 on (⌃⌥⌘B) in the status menu (persisted ui.view / ui.language / ui.batteryVisible)") } ?? "no DSP line"))
+                            + "set 記憶體 (⌃⌥⌘M), 語言 ▸ 繁體中文, 顯示側邊欄 on (⌃⌥⌘B) in the status menu (persisted ui.view / ui.language / ui.batteryVisible)") } ?? "no DSP line"))
         cs.append(Check(name: "panel running ≥ 60 s", ok: pl.startT.map { now - $0 >= 60 } ?? false,
                         detail: pl.startT.map { String(format: "START %.0f s ago", now - $0) } ?? "no START line found"))
         cs.append(Check(name: "panel value rects", ok: rectsTSV != nil && PanelRegions.crops(rectsTSV: rectsTSV).count == 8,

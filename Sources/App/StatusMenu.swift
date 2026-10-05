@@ -2,7 +2,7 @@
 //
 // * NSStatusItem squareLength; template SF Symbol per view (memorychip / cpu / network), accessibility description =
 //   the localized view name, accessibility identifier "wokyis.panel.statusitem", tooltip menuStatusTooltip.
-// * Menu: 記憶體 / CPU / 網路 (radio, ⌃⌥⌘M/P/N) — 下一個畫面 ⌃⌥⌘V — 顯示藍牙電量 ⌃⌥⌘B (checkbox) — 語言 ▸
+// * Menu: 記憶體 / CPU / 網路 (radio, ⌃⌥⌘M/P/N) — 下一個畫面 ⌃⌥⌘V — 顯示側邊欄 ⌃⌥⌘B (checkbox) — 語言 ▸
 //   (跟隨系統（English）/ 繁體中文 / English radio, —, 切換語言 ⌃⌥⌘L) — 結束 Wokyis 面板. The ⌃⌥⌘L equivalent sits on the
 //   submenu's last item (an item that opens a submenu shows no key equivalent). Items whose hot key failed to register
 //   (or --hotkeys no) get no key equivalent.
@@ -64,7 +64,7 @@ enum StatusMenuModel {
         let radio = zh.prefix(3).map(\.checked)
         let keys = zh.filter { !$0.separator }.map(\.keyEquivalent)
         let sub = zh.first { $0.children != nil }?.children ?? []
-        out.append(SelfTestCase("statusmenu.model", titles == ["記憶體", "CPU", "網路", "下一個畫面", "顯示藍牙電量", "語言", "結束 Wokyis 面板"]
+        out.append(SelfTestCase("statusmenu.model", titles == ["記憶體", "CPU", "網路", "下一個畫面", "顯示側邊欄", "語言", "結束 Wokyis 面板"]
                                 && radio == [false, true, false] && zh[5].checked && !zh[4].checked && keys == ["m", "p", "n", "v", "b", "", ""]
                                 && zh[6].action == nil && zh.last?.action == .quit && zh[2].separator == false && zh[3].separator
                                 && sub.count == 5 && sub[1].checked && !sub[0].checked && sub[3].separator
@@ -74,7 +74,7 @@ enum StatusMenuModel {
         // English menu, battery off, language = system; failed hot keys (P, L) → no key equivalent on those items
         let en = entries(UISettings(view: .network, batteryVisible: false, language: .system), resolved: .en, system: .en, hotkeysOK: all.subtracting([.cpu, .language]))
         let enSub = en.first { $0.children != nil }?.children ?? []
-        out.append(SelfTestCase("statusmenu.model_en_failed_keys", en.map(\.title).filter { !$0.isEmpty } == ["Memory", "CPU", "Network", "Next View", "Show Bluetooth Battery", "Language", "Quit Wokyis Panel"]
+        out.append(SelfTestCase("statusmenu.model_en_failed_keys", en.map(\.title).filter { !$0.isEmpty } == ["Memory", "CPU", "Network", "Next View", "Show Side Column", "Language", "Quit Wokyis Panel"]
                                 && en[2].checked && !en[5].checked && en[1].keyEquivalent == "" && en[0].keyEquivalent == "m"
                                 && enSub[0].checked && enSub[0].title == "System (English)" && enSub[4].title == "Switch Language" && enSub[4].keyEquivalent == "",
                                 "\(en.map(\.title)) sub=\(enSub.map(\.title))"))

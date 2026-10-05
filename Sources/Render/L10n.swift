@@ -94,7 +94,8 @@ enum L10n {
         .menuCPU: ("CPU", "CPU", nil, nil),
         .menuNetwork: ("網路", "Network", nil, nil),
         .menuNextView: ("下一個畫面", "Next View", nil, nil),
-        .menuShowBattery: ("顯示藍牙電量", "Show Bluetooth Battery", nil, nil),
+        // one switch for the right-hand column on every view: battery rows (memory / CPU), busiest apps (network)
+        .menuShowBattery: ("顯示側邊欄", "Show Side Column", nil, nil),
         .menuLanguage: ("語言", "Language", nil, nil),
         .menuLangSystem: ("跟隨系統", "System", nil, nil),
         .menuLangZh: ("繁體中文", "繁體中文", nil, nil),       // endonyms: each language names itself
