@@ -169,6 +169,7 @@ simulation only.
 | `--mem-display-hz 4\|2\|1` | 2 | Memory values redrawn at most this often per second (sampling stays at `--mem-hz`) |
 | `--log-level summary\|sample` | summary | Log volume (`sample` is needed by `tools/bin/amcompare`) |
 | `--log-retention-days N` | 30 | Delete earlier runs' logs older than N days (`0` = keep all) |
+| `--log-max-mb N` | 200 | Delete the oldest logs while they total more than N MB (`0` = no cap) |
 | `--snapshot OUT.png [--dump-rects] [--view V] [--lang L] [--battery yes\|no]` | — | Render a fixture offscreen once and exit |
 
 `WokyisPanel --help` lists every option.
@@ -216,6 +217,8 @@ carries `sim=1`. Source ids and rules: [README.md section 10](README.md#10-模�
 - The menu bar and the full-screen title bar slide over the top ~60 px when the pointer touches the top edge of the
   Wokyis.
 - Logs are kept for 30 days: at start and hourly, `panel-*.log` / `stdout-*.log` last modified more than 30 days ago
-  are deleted (`LOG event=pruned`); `--log-retention-days N` changes it, `0` keeps everything.
+  are deleted (`LOG event=pruned`); `--log-retention-days N` changes it, `0` keeps everything. They are also capped
+  at 200 MB in total: the oldest files go first, only the file being written is always kept (`--log-max-mb N`, `0` =
+  no cap). At the default level the panel writes about 7.5 MB a day, so the cap is what usually applies.
 
 Full list: [README.md section 11](README.md#11-已知限制).

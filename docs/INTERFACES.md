@@ -425,7 +425,9 @@ Line = `<timestamp> <KIND> <body>\n`, one `write(2)` per line on logQ. Pass `at:
 Files `logs/panel-YYYYMMDD-HHMMSS.log`, then `-001.log`, `-002.log` … at 64 MB; `logs/current.log` → relative symlink;
 retention (`retentionDays`, `--log-retention-days`, default 30, 0 = off): at start and hourly `panel-*.log` / `stdout-*.log`
 modified more than N days ago are deleted, never this run's files (`static func expired(_:now:days:keep:)`,
-`LOG event=pruned files= mb= older_than_days=`); `WARN log_dir_mb=` when logs/ > 1 GB after pruning (start + hourly).
+`LOG event=pruned files= mb= older_than_days=`); size cap (`maxBytes`, `--log-max-mb`, default 200, 0 = off): then the oldest
+log names are deleted while they total more than the cap, earlier rotations of this run included, never the file being
+written (`static func overCap(_:maxBytes:keep:)`, `isLogName(_:)`, `LOG event=pruned files= mb= over_mb=`); `WARN log_dir_mb=` when logs/ > 1 GB after pruning (start + hourly).
 **Levels (D4)**: `summary` (default) → MEM kept only when ≥ summarySeconds after the last kept MEM (by `at`), DSP dropped,
 AUD ≤ 1 per 60 s, every other kind kept. `sample` → everything.
 Measured (README §4.5): summary ≈ 5.3 MB/day with keyboard + trackpad, sample ≈ 101 MB/day without DSP, ≤ 180 MB/day with DSP. Original estimate: summary ≈ 5–10 MB/day (MEM 8 640 × ~330 B ≈ 2.9 MB,

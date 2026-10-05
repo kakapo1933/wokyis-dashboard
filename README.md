@@ -164,7 +164,7 @@ scripts/start.sh
 
 | 等級 | 寫入內容 | 每日量（實測行長 × 頻率） |
 |---|---|---|
-| `summary`（預設） | `MEM` 每 `--summary-seconds`（預設 10 s）留一行；`DSP` 不寫；`AUD` 每 60 s 最多一行；其他種類全寫 | 約 **5.3 MB/天**（鍵盤＋軌跡板）；每多一組連線的 AirPods 約 +1.1 MB |
+| `summary`（預設） | `MEM` 每 `--summary-seconds`（預設 10 s）留一行；`DSP` 不寫；`AUD` 每 60 s 最多一行；其他種類全寫 | v1 量測約 **5.3 MB/天**（鍵盤＋軌跡板）；每多一組連線的 AirPods 約 +1.1 MB。v2 實測約 **7.5 MB/天**（2.1.0 安裝版連續執行 70 小時寫了 22.1 MB，2026-10-02 至 10-05；多出的是每 10 s 一行的 `CPU`／`NET`） |
 | `sample` | 每一行都寫（`MEM` 4 Hz、`AUD` 0.2 Hz、`DSP` 每次繪圖、v2 `CPU`／`NET` 各 1 Hz） | v1 量測：不含 `DSP` 約 **101 MB/天**；含 `DSP` 上限約 **179 MB/天**（實際運作整檔外推約 156 MB/天）。v2 的 `CPU`／`NET` 每天多 2 × 86,400 行，**估計**多 26–35 MB/天（尚未實測） |
 
 計算依據：
@@ -192,7 +192,7 @@ scripts/start.sh
 
 **重設設定**：先 `scripts/stop.sh`，再執行 `defaults delete io.github.kakapo1933.wokyis-panel`，下次啟動回到預設值。只看目前值：`defaults read io.github.kakapo1933.wokyis-panel`。
 
-**log 自動保留最近 30 天**：啟動時與之後每小時一次，刪除 log 資料夾裡最後修改超過 30 天的 `panel-*.log` 與 `stdout-*.log`（記一行 `LOG event=pruned files= mb= older_than_days=30`）；這次執行正在寫的檔案與其他任何檔案都不動。`--log-retention-days N` 可改天數，`0` 表示不刪。清理後 log 資料夾仍超過 1 GB 時，同樣每小時最多一次記 `WARN log_dir_mb=…`。`build/ logs/ run/ tools/bin/ dist/` 都在 `.gitignore`。
+**log 自動保留最近 30 天**：啟動時與之後每小時一次，刪除 log 資料夾裡最後修改超過 30 天的 `panel-*.log` 與 `stdout-*.log`（記一行 `LOG event=pruned files= mb= older_than_days=30`）；這次執行正在寫的檔案與其他任何檔案都不動。`--log-retention-days N` 可改天數，`0` 表示不刪。**總大小上限 200 MB**：天數規則之後，只要 `panel-*.log` 與 `stdout-*.log` 合計仍超過 200 MB，就從最舊的開始刪到低於上限（記一行 `LOG event=pruned files= mb= over_mb=200`）；這條規則連這次執行較早切出的檔（`-001`、`-002`…）也會刪，只保留正在寫的那一個，其他檔案不計入也不刪。`--log-max-mb N` 可改上限，`0` 表示不設上限。預設等級下 30 天約 225 MB，所以實際上是 200 MB 這條先生效（約保留 26 天）；`sample` 等級則約保留 1–2 天。清理後 log 資料夾仍超過 1 GB 時，同樣每小時最多一次記 `WARN log_dir_mb=…`。`build/ logs/ run/ tools/bin/ dist/` 都在 `.gitignore`。
 
 ---
 
@@ -684,7 +684,7 @@ scripts/start.sh --sp-path /nonexistent/system_profiler   # spawn 真的失敗 �
 4. **CPU 用量離上限不遠**：驗收規定面板 5 分鐘平均要低於「一顆核心的 2%」（活動監視器「% CPU」欄的算法，2% 約等於每分鐘忙 1.2 秒）。實測記憶體頁最耗，約 1.3–1.7%（最忙的連續 5 分鐘 1.71%）；CPU 頁約 0.9–1.1%、網路頁約 0.7–1.3%，因為這兩頁每秒只更新一次。偶爾單一分鐘會超過 2%，但看的是 5 分鐘平均。記憶體頁的數字預設每秒更新 2 次（記憶體仍每秒讀 4 次給壓力圖用）；以前每秒更新 4 次時曾量到 2.09%，超過上限，所以改成 2 次。想更省，可結束面板後在終端機執行 `open -a WokyisPanel --args --mem-display-hz 1`（只對這次啟動有效）。換算成整台 Mac mini 的負擔不到 0.2%，日常使用感覺不到。
 5. **Space 排列會變**：面板每次啟動都把新 Space 放在 Wokyis 現有 Space 的後面，所以目標 App 不一定緊鄰面板，Ctrl+←／→ 可能要按好幾次。Cmd+Tab／Dock 不受排列影響（第 5 節）。
 6. **閒置鎖屏**：螢幕鎖定或顯示器睡眠時，面板被判為遮蔽、停止繪圖（取樣與 log 照常）。鎖定期間不建窗、不進入全螢幕，解鎖後才自動建立（第 5 節）；只有顯示器睡眠、但未鎖定時的全螢幕失敗仍照一般 `fs_failed` 規則計數。
-7. **log 只保留最近 30 天**：預設 summary 等級約 5 MB/天（30 天約 150 MB）、sample 等級約 100–180 MB/天；超過 30 天的舊 log 自動刪除（第 4.6 節，`--log-retention-days` 可改）。
+7. **log 只保留最近 30 天，且總量不超過 200 MB**：預設 summary 等級實測約 7.5 MB/天（30 天約 225 MB，所以通常是 200 MB 上限先生效）、sample 等級約 100–180 MB/天；超過 30 天或超出上限的舊 log 自動刪除（第 4.6 節，`--log-retention-days`、`--log-max-mb` 可改）。上限每小時檢查一次，而且不刪正在寫的檔，所以瞬間佔用可能比 200 MB 多出不到一個檔的量（單檔 64 MB 切換）。
 8. **HID 數字依賴 `system_profiler` 新鮮度**：預設 `--hid-trust-notify no`：HID 數字要 `system_profiler` 45 s 內成功才顯示，`system_profiler` 連續失敗時鍵盤／軌跡板會變灰「—」。
 9. **ad-hoc 簽章每次建置都會變**：CDHash 隨每次建置改變。目前沒有使用任何需要 TCC 權限的 API，所以沒有影響；若日後加入，每次重建都可能要重新授權。
 10. **其他**：

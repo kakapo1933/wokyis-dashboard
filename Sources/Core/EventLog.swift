@@ -5,6 +5,10 @@
 // * File: <dir>/panel-YYYYMMDD-HHMMSS.log, rotated at 64 MB to …-001.log, …-002.log. Retention: panel-*.log and
 //   stdout-*.log (scripts/start.sh) last modified more than `retentionDays` ago (default 30; 0 = keep all) are deleted
 //   at start and at most once per hour (`LOG event=pruned`); the files of this run and anything else are never touched.
+//   Size cap: after that, while this app's logs (same two name patterns) total more than `maxBytes` (default 200 MB;
+//   0 = no cap) the oldest are deleted — earlier rotations of THIS run included, only the file being written is kept
+//   (`LOG event=pruned … over_mb=`). The age rule alone is no bound: a busier log level or a run that lasts for months
+//   (its own rotations are never "earlier runs") grows without limit.
 //   <dir>/current.log is a relative symlink to the file being written (replaced atomically with rename(2)).
 // * Levels (D4):  sample  = every line as given.
 //                 summary = MEM, CPU and NET each decimated to one line per `summarySeconds` (by the line's own
@@ -27,6 +31,7 @@ final class EventLog: @unchecked Sendable {
     let rotateBytes: Int
     let echoStdout: Bool
     let retentionDays: Double
+    let maxBytes: Int64
     static let dirWarnBytes: Int64 = 1 << 30
     static let fileOnlyKinds: Set<String> = ["MEM", "DSP", "AUD", "BAT", "CPU", "NET"]
     /// Kinds decimated to one line per `summarySeconds` at summary level.
@@ -61,8 +66,9 @@ final class EventLog: @unchecked Sendable {
 
     /// `linkCurrent` false: never touch current.log (a launch refused because another panel runs keeps that panel's link).
     init(dir: URL, level: LogLevel = .summary, summarySeconds: Double = 10, rotateBytes: Int = 64 << 20,
-         echoStdout: Bool = true, stdoutFD: Int32 = 1, now: Date = Date(), linkCurrent: Bool = true, retentionDays: Double = 30) throws {
-        self.retentionDays = retentionDays
+         echoStdout: Bool = true, stdoutFD: Int32 = 1, now: Date = Date(), linkCurrent: Bool = true, retentionDays: Double = 30,
+         maxBytes: Int64 = 200 << 20) throws {
+        self.retentionDays = retentionDays; self.maxBytes = maxBytes
         self.dir = dir; self.level = level; self.summarySeconds = summarySeconds; self.stdoutFD = stdoutFD
         self.linkCurrent = linkCurrent
         self.rotateBytes = max(1024, rotateBytes); self.echoStdout = echoStdout
@@ -259,28 +265,52 @@ final class EventLog: @unchecked Sendable {
     static func expired(_ files: [(name: String, modified: Date)], now: Date, days: Double, keep: Set<String>) -> [String] {
         guard days > 0 else { return [] }
         let cutoff = now.addingTimeInterval(-days * 86_400)
-        return files.filter { f in
-            !keep.contains(f.name) && f.modified < cutoff
-                && f.name.range(of: #"^(panel-\d{8}-\d{6}(-\d{3})?|stdout-\d{8}-\d{6})\.log$"#, options: .regularExpression) != nil
-        }.map(\.name).sorted()
+        return files.filter { f in !keep.contains(f.name) && f.modified < cutoff && isLogName(f.name) }.map(\.name).sorted()
+    }
+
+    /// The only names retention ever deletes: panel-YYYYMMDD-HHMMSS[-NNN].log and stdout-YYYYMMDD-HHMMSS.log.
+    static func isLogName(_ name: String) -> Bool {
+        name.range(of: #"^(panel-\d{8}-\d{6}(-\d{3})?|stdout-\d{8}-\d{6})\.log$"#, options: .regularExpression) != nil
+    }
+
+    /// Size cap: the oldest log files (by modification time, then name) to delete so that this app's logs total at most
+    /// `maxBytes`. Files in `keep` (the one being written) count towards the total but are never returned, so the total
+    /// can stay above the cap only by what `keep` holds. maxBytes <= 0 → none.
+    static func overCap(_ files: [(name: String, modified: Date, size: Int)], maxBytes: Int64, keep: Set<String>) -> [String] {
+        guard maxBytes > 0 else { return [] }
+        let logs = files.filter { isLogName($0.name) }
+        var total = logs.reduce(Int64(0)) { $0 + Int64($1.size) }
+        var out: [String] = []
+        for f in logs.sorted(by: { ($0.modified, $0.name) < ($1.modified, $1.name) }) where !keep.contains(f.name) {
+            if total <= maxBytes { break }
+            out.append(f.name); total -= Int64(f.size)
+        }
+        return out
     }
 
     private func prune(_ at: Date) {
-        guard retentionDays > 0,
+        guard retentionDays > 0 || maxBytes > 0,
               let items = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey, .fileSizeKey])
         else { return }
-        var files: [(name: String, modified: Date)] = [], sizes: [String: Int] = [:]
+        var files: [(name: String, modified: Date, size: Int)] = []
         for u in items {
             guard let v = try? u.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey, .fileSizeKey]),
                   v.isRegularFile == true, let m = v.contentModificationDate else { continue }
-            files.append((u.lastPathComponent, m)); sizes[u.lastPathComponent] = v.fileSize ?? 0
+            files.append((u.lastPathComponent, m, v.fileSize ?? 0))
         }
-        let keep = Set((0...rotation).map(fileName))
-        var removed = 0, bytes = 0
-        for name in EventLog.expired(files, now: at, days: retentionDays, keep: keep)
-        where unlink(dir.appendingPathComponent(name).path) == 0 { removed += 1; bytes += sizes[name] ?? 0 }
-        guard removed > 0 else { return }
-        writeFile("LOG", EventLog.timestamp(at) + " LOG event=pruned files=\(removed) mb=\(bytes >> 20) older_than_days=\(Int(retentionDays))\n")
+        /// unlink `names`; returns (files removed, their bytes) and drops them from `files`
+        func remove(_ names: [String]) -> (Int, Int) {
+            var removed = 0, bytes = 0
+            for name in names where unlink(dir.appendingPathComponent(name).path) == 0 {
+                removed += 1; bytes += files.first { $0.name == name }?.size ?? 0
+                files.removeAll { $0.name == name }
+            }
+            return (removed, bytes)
+        }
+        let (n1, b1) = remove(EventLog.expired(files.map { ($0.name, $0.modified) }, now: at, days: retentionDays, keep: Set((0...rotation).map(fileName))))
+        if n1 > 0 { writeFile("LOG", EventLog.timestamp(at) + " LOG event=pruned files=\(n1) mb=\(b1 >> 20) older_than_days=\(Int(retentionDays))\n") }
+        let (n2, b2) = remove(EventLog.overCap(files, maxBytes: maxBytes, keep: [fileName(rotation)]))
+        if n2 > 0 { writeFile("LOG", EventLog.timestamp(at) + " LOG event=pruned files=\(n2) mb=\(b2 >> 20) over_mb=\(maxBytes >> 20)\n") }
     }
 
     private func checkDirSize(_ at: Date) {
@@ -503,6 +533,40 @@ enum EventLogSelfTest {
         let ex = EventLog.expired(fs, now: t0, days: 30, keep: ["panel-20260701-000000.log"])
         out.append(SelfTestCase("eventlog.retention", ex == ["panel-20260801-120000-001.log", "panel-20260801-120000.log", "stdout-20260801-120000.log"]
                                 && EventLog.expired(fs, now: t0, days: 0, keep: []).isEmpty, "\(ex)"))
+        // size cap: oldest log names first until the total fits; other files are neither counted nor deleted; the kept
+        // file counts but stays; already under the cap / cap 0 → nothing
+        let mb = 1 << 20
+        let cs: [(name: String, modified: Date, size: Int)] = [
+            ("panel-20260901-000000.log", t0.addingTimeInterval(-9 * day), 64 * mb), ("panel-20260901-000000-001.log", t0.addingTimeInterval(-6 * day), 64 * mb),
+            ("stdout-20260901-000000.log", t0.addingTimeInterval(-8 * day), 1 * mb), ("panel-20260901-000000-002.log", t0.addingTimeInterval(-3 * day), 64 * mb),
+            ("panel-20260901-000000-003.log", t0, 40 * mb), ("notes.txt", t0.addingTimeInterval(-90 * day), 900 * mb)]
+        let live: Set<String> = ["panel-20260901-000000-003.log"]
+        let c200 = EventLog.overCap(cs, maxBytes: Int64(200 * mb), keep: live), c50 = EventLog.overCap(cs, maxBytes: Int64(50 * mb), keep: live)
+        out.append(SelfTestCase("eventlog.size_cap", c200 == ["panel-20260901-000000.log"]
+                                && c50 == ["panel-20260901-000000.log", "stdout-20260901-000000.log", "panel-20260901-000000-001.log", "panel-20260901-000000-002.log"]
+                                && EventLog.overCap(cs, maxBytes: Int64(233 * mb), keep: live).isEmpty && EventLog.overCap(cs, maxBytes: 0, keep: []).isEmpty,
+                                "\(c200) | \(c50.count)"))
+        // live: a real directory — the age rule (the 40-day file) and then the cap (7500 B of logs > 5000: the oldest
+        // 3000 B file goes, 4500 fit) both run at start; this run's file and foreign files stay
+        do {
+            let d3 = dir.appendingPathComponent("cap")
+            try FileManager.default.createDirectory(at: d3, withIntermediateDirectories: true)
+            func put(_ n: String, _ bytes: Int, ageDays: Double) throws {
+                let u = d3.appendingPathComponent(n)
+                try Data(count: bytes).write(to: u)
+                try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-ageDays * day)], ofItemAtPath: u.path)
+            }
+            try put("panel-20260101-000000.log", 1000, ageDays: 40); try put("panel-20260901-000000.log", 3000, ageDays: 5)
+            try put("panel-20260902-000000.log", 3000, ageDays: 4); try put("stdout-20260903-000000.log", 1500, ageDays: 3)
+            try put("notes.txt", 50_000, ageDays: 90)
+            let log = try EventLog(dir: d3, level: .sample, echoStdout: false, retentionDays: 30, maxBytes: 5000)
+            log.line("X", "first line triggers the start-up check"); log.flushSync()
+            let left = Set(try FileManager.default.contentsOfDirectory(atPath: d3.path))
+            let s = String(decoding: (try? Data(contentsOf: log.currentFile)) ?? Data(), as: UTF8.self)
+            out.append(SelfTestCase("eventlog.size_cap_live", left == ["notes.txt", "panel-20260902-000000.log", "stdout-20260903-000000.log", "current.log", log.currentFile.lastPathComponent]
+                                    && s.contains(" LOG event=pruned files=1 mb=0 older_than_days=30\n") && s.contains(" LOG event=pruned files=1 mb=0 over_mb=0\n"),
+                                    "\(left.sorted())"))
+        } catch { out.append(SelfTestCase("eventlog.size_cap_live", false, "\(error)")) }
         return out
     }
 }

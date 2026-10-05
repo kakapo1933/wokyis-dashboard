@@ -34,7 +34,7 @@ case .app:
     let log: EventLog
     do {
         log = try EventLog(dir: config.logDirURL, level: config.logLevel, summarySeconds: config.summarySeconds,
-                           linkCurrent: lock != .busy, retentionDays: config.logRetentionDays)
+                           linkCurrent: lock != .busy, retentionDays: config.logRetentionDays, maxBytes: config.logMaxBytes)
     } catch {
         FileHandle.standardError.write(Data("WokyisPanel: cannot open log dir \(config.logDirURL.path): \(error)\n".utf8))
         exit(73)
