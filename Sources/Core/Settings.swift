@@ -14,6 +14,8 @@ import Foundation
 /// A UI action from the status menu or a hot key (spec §8.1). Pure value (also used by the selftest).
 enum UIAction: Equatable, Sendable {
     case view(ViewKind), nextView, toggleBattery, language(LanguagePref), switchLanguage, quit
+    /// About submenu: copy the version line to the pasteboard. Changes no setting (AppController handles it).
+    case copyAbout
     /// Short log token (UI event=dedup action=…).
     var token: String {
         switch self {
@@ -23,6 +25,7 @@ enum UIAction: Equatable, Sendable {
         case .language(let l): "lang_\(l.rawValue)"
         case .switchLanguage: "switch_language"
         case .quit: "quit"
+        case .copyAbout: "copy_about"
         }
     }
 }
@@ -181,6 +184,7 @@ final class SettingsModel {
         let sysBefore = systemLang
         switch a {
         case .quit: return .quit
+        case .copyAbout: return .unchanged
         case .view(let v): next.view = v
         case .nextView: next.view = cur.view.next
         case .toggleBattery: next.batteryVisible.toggle()

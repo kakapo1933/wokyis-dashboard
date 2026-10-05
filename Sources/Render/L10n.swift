@@ -26,7 +26,7 @@ enum L10n {
         case simPrefix, simFailed, simHang, simGarbage, simPressure, simMore, listSep, partSep
         // status-item menu
         case menuMemory, menuCPU, menuNetwork, menuNextView, menuShowBattery, menuLanguage, menuLangSystem, menuLangZh,
-             menuLangEn, menuLangSwitch, menuQuit, menuStatusTooltip
+             menuLangEn, menuLangSwitch, menuAbout, menuAboutVersion, menuAboutCopy, menuQuit, menuStatusTooltip
     }
 
     /// (zh, en, en compact?, zh compact?) — compact forms are used only when the battery column is visible.
@@ -101,6 +101,9 @@ enum L10n {
         .menuLangZh: ("繁體中文", "繁體中文", nil, nil),       // endonyms: each language names itself
         .menuLangEn: ("English", "English", nil, nil),
         .menuLangSwitch: ("切換語言", "Switch Language", nil, nil),  // ⌃⌥⌘L: 繁體中文 ↔ English
+        .menuAbout: ("關於 Wokyis 面板", "About Wokyis Panel", nil, nil),
+        .menuAboutVersion: ("版本 %@（%@）", "Version %@ (%@)", nil, nil),   // CFBundleShortVersionString, CFBundleVersion
+        .menuAboutCopy: ("複製版本資訊", "Copy Version Info", nil, nil),
         .menuQuit: ("結束 Wokyis 面板", "Quit Wokyis Panel", nil, nil),
         .menuStatusTooltip: ("Wokyis 面板：%@", "Wokyis Panel: %@", nil, nil),
     ]

@@ -246,6 +246,8 @@ scripts/start.sh
 | 顯示側邊欄（勾選） | ⌃⌥⌘B | 顯示／隱藏右側欄：記憶體與 CPU 畫面是藍牙電量，網路畫面是程式流量排行（2.2.1 以前叫「顯示藍牙電量」） |
 | 語言 ▸ 跟隨系統（…）／繁體中文／English（單選） | — | 「跟隨系統（…）」括號內是目前解析的結果 |
 | 語言 ▸ 切換語言 | ⌃⌥⌘L | 只在繁體中文與 English 之間切換（依目前畫面上的語言），不會切到「跟隨系統」；要跟隨系統請從選單選 |
+| 關於 Wokyis 面板 ▸ 版本／Build | — | 純資訊（灰字）：版本號與 build 號，以及執行檔 SHA-256 前 12 碼（與 log 的 `START build=` 相同，用來確認正在跑的是哪一份）。做成子選單而不是視窗，因為視窗必須 activate App |
+| 關於 Wokyis 面板 ▸ 複製版本資訊 | — | 把 `Wokyis Panel <版本> (<build 號>) build=<雜湊>` 放進剪貼簿；記一行 `UI event=copy_about` |
 | 結束 Wokyis 面板 | — | 與 `scripts/stop.sh` 相同的優雅結束路徑（寫 `STOP`） |
 
 - 切換畫面、電量欄或語言**不會 activate 面板、不搶焦點、不切換 Space**，只重畫面板。每次變更記一行 `UI event=view|battery|lang from= to= via=menu|hotkey`，並寫入記住的設定（第 4.6 節）。

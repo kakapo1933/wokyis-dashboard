@@ -191,6 +191,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// One UI action (menu item or hot key). Never activates the app, never touches the window / Space.
     func apply(_ a: UIAction, via: String) {
         guard phase != .exiting else { return }
+        if a == .copyAbout {              // no setting, no redraw, no activation: the pasteboard only
+            let about = AboutInfo.running
+            let ok = about.copy()
+            log.event("UI", "event=copy_about ok=\(ok ? 1 : 0) text=\(EventLog.q(about.line)) via=\(via)")
+            return
+        }
         let before = settings.effective
         switch settings.apply(a, via: via, at: Self.monoNow()) {
         case .quit:

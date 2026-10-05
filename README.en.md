@@ -108,6 +108,8 @@ The panel adds a status item to the menu bar (SF Symbol `memorychip` / `cpu` / `
 | Show Side Column (checkbox) | ⌃⌥⌘B | Show / hide the right-hand column: battery levels on the memory and CPU views, busiest apps on the network view (hidden = full-width 1224 px main column). Called "Show Bluetooth Battery" up to 2.2.1 |
 | Language ▸ System (…) / 繁體中文 / English (radio) | — | "System (…)" shows what it currently resolves to |
 | Language ▸ Switch Language | ⌃⌥⌘L | Toggles between 繁體中文 and English (based on what is shown); never selects System |
+| About Wokyis Panel ▸ Version / Build | — | Information only: version, build number and the first 12 hex digits of the executable's SHA-256 (the `START build=` value in the log). A submenu, not a window, because a window would have to activate the app |
+| About Wokyis Panel ▸ Copy Version Info | — | Copies `Wokyis Panel <version> (<build number>) build=<hash>` to the clipboard |
 | Quit Wokyis Panel | — | Same graceful exit as `scripts/stop.sh` |
 
 - Changing the view, the battery column or the language never activates the panel, never takes focus and never
