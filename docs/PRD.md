@@ -3,8 +3,8 @@
 | 項目 | 內容 |
 |---|---|
 | 產品 | Wokyis Panel（`WokyisPanel.app`，bundle ID `io.github.kakapo1933.wokyis-panel`） |
-| 版本 | 2.1.0（[GitHub Release v2.1.0](https://github.com/kakapo1933/wokyis-dashboard/releases/tag/v2.1.0)） |
-| 文件性質 | 依已完成並驗收的 v1、v2、2.0.0、2.1.0 反推整理；需求、決策與驗收結果都對應目前的程式與 [README](../README.md) |
+| 版本 | 2.2.0（[GitHub Release v2.2.0](https://github.com/kakapo1933/wokyis-dashboard/releases/tag/v2.2.0)） |
+| 文件性質 | 依已完成並驗收的 v1、v2、2.0.0、2.1.0、2.2.0 反推整理；需求、決策與驗收結果都對應目前的程式與 [README](../README.md) |
 | 最後更新 | 2026-10-02 |
 
 ---
@@ -185,6 +185,7 @@ Mac mini 外接一台 Wokyis 5 吋 16:9 小螢幕（1280×720，以 1 倍縮放�
 | v2 | 2026-10-02 | CPU、網路畫面；選單列圖示與快捷鍵切換；電量欄開關；繁中／英文 |
 | 2.0.0 | 2026-10-02 | 新 icon；可安裝的 App 與 DMG（老 Macintosh 風格安裝畫面）；GitHub Release |
 | 2.1.0 | 2026-10-02 | log 自動保留最近 30 天（`--log-retention-days`） |
+| 2.2.0 | 2026-10-05 | 網路畫面的側邊欄改列流量最大的前 5 個程式（F10a） |
 
 ## 10. 未決事項與後續可能
 
